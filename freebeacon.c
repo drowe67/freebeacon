@@ -9,7 +9,7 @@
 
   If stereo audio device we use left channel only.
 
-  A  whole lot of code was lifted from freedv-dev for this program.
+  A whole lot of code was lifted from freedv-dev for this program.
 
   TODO:
 
@@ -53,24 +53,28 @@
 #define SAMPLE_RATE         48000               // 48 kHz sampling rate rec. as we can trust accuracy of sound card
 #define N8                  160                 // processing buffer size at 8 kHz
 #define N48                 (N8*SAMPLE_RATE/FS) // processing buffer size at 48 kHz
+#define SYNC_FRAMES         50                  // frames of valid rx
 
 /* globals used to communicate with async events */
 
 volatile int keepRunning;
 char txtMsg[MAX_CHAR], *ptxtMsg, triggerString[MAX_CHAR];
 int triggered;
+float snr_est, snr_sample;
 
 /* state machine defines */
 
 #define SRX_IDLE          0      /* listening but no FreeDV signal                                   */
-#define SRX_SYNC          1      /* We have sync on a valid FreeDV signal                            */
-#define SRX_TRIGGERED     2      /* the magic trigger text string has been received, but still in RX */
-#define STX               3      /* transmitting reply                                               */
+#define SRX_MAYBE_SYNC    1      /* We have sync but lets see if it goes away                        */
+#define SRX_SYNC          2      /* We have sync on a valid FreeDV signal                            */
+#define SRX_MAYBE_UNSYNC  3      /* We have lost sync but lets see if it's really gone               */
+#define STX               4      /* transmitting reply                                               */
 
 char *state_str[] = {
     "Rx Idle",
+    "Rx Maybe Sync",
     "Rx Sync",
-    "Rx Triggered",
+    "Rx Maybe UnSync",
     "Tx"
 };
 
@@ -153,18 +157,18 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 	fprintf(stderr, "\nFreeBeacon - FreeDV Beacon\n"
 		"usage: %s [OPTIONS]\n\n"
                 "Options:\n"
-                "\t-l list audio devices\n", argv[0]);
+                "\t-l --list (audio devices)\n", argv[0]);
         for(i=0; i<num_opts-1; i++) {
 		if(long_options[i].has_arg == no_argument) {
 			option_parameters="";
 		} else if (strcmp("dev", long_options[i].name) == 0) {
-			option_parameters = " Audio Device Number";
+			option_parameters = " DeviceNumber (-l --list to list devices)";
                 } else if (strcmp("trigger", long_options[i].name) == 0) {
-			option_parameters = " text string used to trigger beacon";
+			option_parameters = " textString (used to trigger beacon)";
                 } else if (strcmp("callsign", long_options[i].name) == 0) {
-			option_parameters = " callsign to return on tx";
+			option_parameters = " callsign (returned in text str to tx)";
                 } else if (strcmp("txfilename", long_options[i].name) == 0) {
-			option_parameters = " wavefile to use for source audio on tramsmit";
+			option_parameters = " wavefile (to use for source audio on tramsmit)";
                 }
 		fprintf(stderr, "\t--%s%s\n", long_options[i].name, option_parameters);
 	}
@@ -192,8 +196,12 @@ void callbackNextRxChar(void *callback_state, char c) {
         *ptxtMsg++ = c;
         *ptxtMsg = 0;
          ptxtMsg = txtMsg;
-         if (strstr(txtMsg, triggerString) != NULL)
+         fprintf(stderr, "RX txtMsg: %s\n", txtMsg);
+         if (strstr(txtMsg, triggerString) != NULL) {
              triggered = 1;
+             snr_sample = snr_est;
+             fprintf(stderr, "Tx triggered!\n");
+         }
     } 
 }
 
@@ -215,7 +223,7 @@ SNDFILE *openPlayFile(char fileName[], int *sfFs)
     sfPlayFile = sf_open(fileName, SFM_READ, &sfInfo);
     if(sfPlayFile == NULL) {
         const char *strErr = sf_strerror(NULL);
-        fprintf(stderr, " %s couldn't open: %s", strErr, fileName);
+        fprintf(stderr, " %s Couldn't open: %s\n", strErr, fileName);
     }
     *sfFs = sfInfo.samplerate;
 
@@ -243,8 +251,12 @@ int main(int argc, char *argv[]) {
     int                 sfFs;
     int                 triggerf, txfilenamef, callsignf;
     int                 sync;
-    float               snr_est;
     char                callsign[MAX_CHAR];
+    FILE               *ftmp;
+    unsigned int        sync_counter;
+
+    ftmp = fopen("t.raw", "wb");
+    assert(ftmp != NULL);
 
     /* Defaults -------------------------------------------------------------------------------*/
 
@@ -253,21 +265,24 @@ int main(int argc, char *argv[]) {
     sprintf(txFileName, "txaudio.wav");
     sprintf(callsign, "FreeBeacon");
 
+    if (Pa_Initialize()) {
+        fprintf(stderr, "Port Audio failed to initialize");
+        exit(1);
+    }
+ 
     /* Process command line options -----------------------------------------------------------*/
 
-    char* opt_string = "hl:";
+    char* opt_string = "hl";
     struct option long_options[] = {
         { "dev", required_argument, &devNum, 1 },
         { "trigger", required_argument, &triggerf, 1 },
         { "txfilename", required_argument, &txfilenamef, 1 },
         { "callsign", required_argument, &callsignf, 1 },
+        { "list", no_argument, NULL, 'l' },
+        { "help", no_argument, NULL, 'h' },
         { NULL, no_argument, NULL, 0 }
     };
     int num_opts=sizeof(long_options)/sizeof(struct option);
-
-    if (argc < 2) {
-        printHelp(long_options, num_opts, argv);
-    }
 
     while(1) {
         int option_index = 0;
@@ -307,11 +322,6 @@ int main(int argc, char *argv[]) {
 
     /* Open Sound Device and start processing --------------------------------------------------------------*/
 
-    if (Pa_Initialize()) {
-        fprintf(stderr, "Port Audio failed to initialize");
-        exit(1);
-    }
- 
     f = freedv_open(FREEDV_MODE_1600); assert(f != NULL);
     assert(freedv_get_modem_sample_rate(f) == FS); /* just in case modem FS every changes */
     freedv_set_callback_txt(f, callbackNextRxChar, callbackNextTxChar, NULL);
@@ -378,9 +388,7 @@ int main(int argc, char *argv[]) {
 
     while(keepRunning) {
 
-        next_state = state;
-
-        if ((state == SRX_IDLE) || (state == SRX_SYNC)) {
+        if (state != STX) {
             short demod_in[freedv_get_n_max_modem_samples(f)];
             short speech_out[freedv_get_n_speech_samples(f)];
 
@@ -397,12 +405,13 @@ int main(int argc, char *argv[]) {
                     in48k_short[j] = stereo_short[j]; 
             }
             int n8k = resample(rxsrc, in8k_short, in48k_short, FS, SAMPLE_RATE, N48, N48);
+
             fifo_write(fifo, in8k_short, n8k);
 
             /* demodulate to decoded speech samples */
 
             nin = freedv_nin(f);
-            if (fifo_read(fifo, demod_in, nin) == nin) {
+            if (fifo_read(fifo, demod_in, nin) == 0) {
                 freedv_rx(f, speech_out, demod_in);
                 freedv_get_modem_stats(f, &sync, &snr_est);
              }
@@ -414,17 +423,19 @@ int main(int argc, char *argv[]) {
 
             /* TODO: assert PTT, e.g. via RS232 */
             
-            /* resample sound file as can't guarantee 8KHz sample rate */
+            if (sfPlayFile != NULL) {
+                /* resample sound file as can't guarantee 8KHz sample rate */
 
-            unsigned int nsf = freedv_get_n_speech_samples(f)*sfFs/FS;
-            short        insf_short[nsf];
-            unsigned int n = sf_read_short(sfPlayFile, insf_short, nsf);
-            n8k = resample(playsrc, speech_in, insf_short, SAMPLE_RATE, sfFs, freedv_get_n_speech_samples(f), nsf);
+                unsigned int nsf = freedv_get_n_speech_samples(f)*sfFs/FS;
+                short        insf_short[nsf];
+                unsigned int n = sf_read_short(sfPlayFile, insf_short, nsf);
+                n8k = resample(playsrc, speech_in, insf_short, SAMPLE_RATE, sfFs, freedv_get_n_speech_samples(f), nsf);
             
-            if (n != nsf) {
-                /* end of file - this signals state machine we've finished */
-                sf_close(sfPlayFile);
-                sfPlayFile = NULL;
+                if (n != nsf) {
+                    /* end of file - this signals state machine we've finished */
+                    sf_close(sfPlayFile);
+                    sfPlayFile = NULL;
+                }
             }
 
             freedv_tx(f, mod_out, speech_in);
@@ -445,10 +456,13 @@ int main(int argc, char *argv[]) {
 
         /* state machine processing */
 
+        next_state = state;
+
         switch(state) {
         case SRX_IDLE:
             if (sync) {
-                next_state = SRX_SYNC;
+                next_state = SRX_MAYBE_SYNC;
+                sync_counter = 0;
                 *txtMsg = 0;
                 ptxtMsg = txtMsg;
                 triggered = 0;
@@ -456,23 +470,52 @@ int main(int argc, char *argv[]) {
                 freedv_set_total_bits(f, 0);
             }
             break;
-        case SRX_SYNC:
-            if (!sync) {
-                if (triggered) {
-                    float ber = (float)freedv_get_total_bit_errors(f)/freedv_get_total_bits(f);
-                    char tmpStr[MAX_CHAR];
-
-                    sprintf(tmpStr, "SNR: %3.1f BER: %3.2f de %s\n",
-                            snr_est, ber, callsign);
-                    strcpy(txtMsg, tmpStr);
-                    ptxtMsg = txtMsg;
-                    sfPlayFile = openPlayFile(txFileName, &sfFs);
-
-                    next_state = STX;
+        case SRX_MAYBE_SYNC:
+            if (sync) {
+                sync_counter++;
+                if (sync_counter == SYNC_FRAMES) {
+                    /* we really are in sync */
+                    next_state = SRX_SYNC;
                 }
             }
             else
                 next_state = SRX_IDLE;
+            break;
+        case SRX_SYNC:
+            sync_counter++;
+            if ((sync_counter % SYNC_FRAMES) == 0)
+                fprintf(stderr, "sync: %d snr: %3.1f\n", sync, snr_est);                
+            if (!sync) {
+                sync_counter = 0;
+                next_state = SRX_MAYBE_UNSYNC;
+            }
+            break;
+        case SRX_MAYBE_UNSYNC:
+            if (!sync) {
+                sync_counter++;
+                if (sync_counter == SYNC_FRAMES) {
+                    /* we really are out of sync */
+                    if (triggered) {
+                        /* kick off a tx if triggered */
+                        float ber = (float)freedv_get_total_bit_errors(f)/freedv_get_total_bits(f);
+                        char tmpStr[MAX_CHAR];
+
+                        sprintf(tmpStr, "SNR: %3.1f BER: %3.2f de %s\n",
+                                snr_sample, ber, callsign);
+                        strcpy(txtMsg, tmpStr);
+                        fprintf(stderr, "TX txtMsg: %s\n", txtMsg);
+                        ptxtMsg = txtMsg;
+                        sfPlayFile = openPlayFile(txFileName, &sfFs);
+
+                        next_state = STX;
+                    }
+                    else {
+                        next_state = SRX_IDLE;
+                    }
+                }
+            }
+            else
+                next_state = SRX_SYNC; /* sync is back so false alarm */
             break;
         case STX:
             if (sfPlayFile == NULL)
@@ -480,8 +523,15 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        if (next_state != state) 
-            fprintf(stderr, "state: %s next_state %s\n", state_str[state], state_str[next_state]);
+        /* filter out IDLE->MAYBE_SYNC as this fires on channel noise all the time */
+
+        int quiet = 0;
+        if ((state == SRX_IDLE) && (next_state == SRX_MAYBE_SYNC))
+            quiet = 1;
+        if ((state == SRX_MAYBE_SYNC) && (next_state == SRX_IDLE))
+            quiet = 1;
+        if ((next_state != state) && !quiet) 
+            fprintf(stderr, "state: %15s next_state: %15s\n", state_str[state], state_str[next_state]);
         state = next_state;
     }
 
@@ -499,4 +549,5 @@ int main(int argc, char *argv[]) {
     src_delete(txsrc);
     src_delete(playsrc);
     freedv_close(f);
+    fclose(ftmp);
 }
