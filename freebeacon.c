@@ -233,7 +233,7 @@ SNDFILE *openPlayFile(char fileName[], int *sfFs)
   
 int main(int argc, char *argv[]) {
     struct freedv      *f;
-    PaStreamParameters  inputParameters;
+    PaStreamParameters  inputParameters, outputParameters;
     const PaDeviceInfo *deviceInfo = NULL;
     PaStream           *stream = NULL;
     PaError             err;
@@ -331,7 +331,7 @@ int main(int argc, char *argv[]) {
     txsrc = src_new(SRC_SINC_FASTEST, 1, &src_error); assert(txsrc != NULL);
     playsrc = src_new(SRC_SINC_FASTEST, 1, &src_error); assert(playsrc != NULL);
 
-    /* work out how many input channels this device supports */
+    /* Open Port Audio device */
 
     deviceInfo = Pa_GetDeviceInfo(devNum);
     if (deviceInfo == NULL) {
@@ -343,13 +343,26 @@ int main(int argc, char *argv[]) {
     else
         inputChannels = 2;
 
-    /* open device */
+    /* input device */
 
     inputParameters.device = devNum;
     inputParameters.channelCount = inputChannels;
     inputParameters.sampleFormat = paInt16;
     inputParameters.suggestedLatency = Pa_GetDeviceInfo( inputParameters.device )->defaultHighInputLatency;
     inputParameters.hostApiSpecificStreamInfo = NULL;
+
+    /* output device */
+
+    if (deviceInfo->maxOutputChannels == 1)
+        outputChannels = 1;
+    else
+        outputChannels = 2;
+
+    outputParameters.device = devNum;
+    outputParameters.channelCount = outputChannels;
+    outputParameters.sampleFormat = paInt16;
+    outputParameters.suggestedLatency = Pa_GetDeviceInfo( outputParameters.device )->defaultHighOutputLatency;
+    outputParameters.hostApiSpecificStreamInfo = NULL;
 
     fprintf(stderr, "Ctrl-C to exit\n");
     fprintf(stderr, "trigger string: %s txFileName: %s\n", triggerString, txFileName);
@@ -358,7 +371,7 @@ int main(int argc, char *argv[]) {
     err = Pa_OpenStream(
               &stream,
               &inputParameters,
-              NULL,
+              &outputParameters,
               SAMPLE_RATE,
               0,           /* let the driver decide */
               paClipOff,    
@@ -429,8 +442,10 @@ int main(int argc, char *argv[]) {
                 unsigned int nsf = freedv_get_n_speech_samples(f)*sfFs/FS;
                 short        insf_short[nsf];
                 unsigned int n = sf_read_short(sfPlayFile, insf_short, nsf);
-                n8k = resample(playsrc, speech_in, insf_short, SAMPLE_RATE, sfFs, freedv_get_n_speech_samples(f), nsf);
-            
+                n8k = resample(playsrc, speech_in, insf_short, FS, sfFs, freedv_get_n_speech_samples(f), nsf);
+
+                //fwrite(speech_in, sizeof(short), freedv_get_n_nom_modem_samples(f), ftmp);
+
                 if (n != nsf) {
                     /* end of file - this signals state machine we've finished */
                     sf_close(sfPlayFile);
@@ -439,8 +454,11 @@ int main(int argc, char *argv[]) {
             }
 
             freedv_tx(f, mod_out, speech_in);
+            //fwrite(mod_out, sizeof(short), freedv_get_n_nom_modem_samples(f), ftmp);
 
             int n48k = resample(txsrc, out48k_short, mod_out, SAMPLE_RATE, FS, N48, freedv_get_n_nom_modem_samples(f));
+            printf("n48k: %d N48: %d n_nom: %d\n", n48k, N48, freedv_get_n_nom_modem_samples(f));
+            fwrite(out48k_short, sizeof(short), n48k, ftmp);
             for(j=0; j<n48k; j++) {
                 if (outputChannels == 2) {
                     stereo_short[2*j] = out48k_short[j];   // left channel
@@ -500,7 +518,7 @@ int main(int argc, char *argv[]) {
                         float ber = (float)freedv_get_total_bit_errors(f)/freedv_get_total_bits(f);
                         char tmpStr[MAX_CHAR];
 
-                        sprintf(tmpStr, "SNR: %3.1f BER: %3.2f de %s\n",
+                        sprintf(tmpStr, "SNR: %3.1f BER: %4.3f de %s\r",
                                 snr_sample, ber, callsign);
                         strcpy(txtMsg, tmpStr);
                         fprintf(stderr, "TX txtMsg: %s\n", txtMsg);
@@ -531,7 +549,7 @@ int main(int argc, char *argv[]) {
         if ((state == SRX_MAYBE_SYNC) && (next_state == SRX_IDLE))
             quiet = 1;
         if ((next_state != state) && !quiet) 
-            fprintf(stderr, "state: %15s next_state: %15s\n", state_str[state], state_str[next_state]);
+            fprintf(stderr, "state: %-20s next_state: %-20s\n", state_str[state], state_str[next_state]);
         state = next_state;
     }
 
