@@ -23,6 +23,7 @@
   [ ] writing to wave files
   [ ] basic SM1000 version
       + has audio interfaces 
+  [ ] test mode to tx straight away then end
 
   Building:
 
@@ -49,10 +50,8 @@
 #include "freedv_api.h"
 
 #define MAX_CHAR            80
-#define FS                  8000                // 8 kHz sampling rate used for modem
-#define SAMPLE_RATE         48000               // 48 kHz sampling rate rec. as we can trust accuracy of sound card
-#define N8                  160                 // processing buffer size at 8 kHz
-#define N48                 (N8*SAMPLE_RATE/FS) // processing buffer size at 48 kHz
+#define FS8                 8000                // codec audio sample rate fixed at 8 kHz
+#define FS48                48000               // 48 kHz sampling rate rec. as we can trust accuracy of sound card
 #define SYNC_FRAMES         50                  // frames of valid rx
 
 /* globals used to communicate with async events */
@@ -97,13 +96,11 @@ int resample(SRC_STATE *src,
             )
 {
     SRC_DATA src_data;
-    float    input[N48*4];
-    float    output[N48*4];
+    float    input[length_input_short];
+    float    output[length_output_short];
     int      ret;
 
     assert(src != NULL);
-    assert(length_input_short <= N48*4);
-    assert(length_output_short <= N48*4);
 
     src_short_to_float_array(input_short, input, length_input_short);
 
@@ -113,6 +110,7 @@ int resample(SRC_STATE *src,
     src_data.output_frames = length_output_short;
     src_data.end_of_input = 0;
     src_data.src_ratio = (float)output_sample_rate/input_sample_rate;
+    //printf("%d %d src_ratio: %f \n", length_input_short, length_output_short, src_data.src_ratio);
 
     ret = src_process(src, &src_data);
     assert(ret == 0);
@@ -237,9 +235,6 @@ int main(int argc, char *argv[]) {
     const PaDeviceInfo *deviceInfo = NULL;
     PaStream           *stream = NULL;
     PaError             err;
-    short               stereo_short[2*N48];
-    short               in48k_short[N48], out48k_short[N48];
-    short               in8k_short[N48];
     int                 numDevices, nBufs, n8k, i, j, src_error, inputChannels, nin, devNum;
     int                 outputChannels;
     int                 state, next_state;
@@ -254,6 +249,8 @@ int main(int argc, char *argv[]) {
     char                callsign[MAX_CHAR];
     FILE               *ftmp;
     unsigned int        sync_counter;
+
+    /* debug raw file */
 
     ftmp = fopen("t.raw", "wb");
     assert(ftmp != NULL);
@@ -323,10 +320,22 @@ int main(int argc, char *argv[]) {
     /* Open Sound Device and start processing --------------------------------------------------------------*/
 
     f = freedv_open(FREEDV_MODE_1600); assert(f != NULL);
-    assert(freedv_get_modem_sample_rate(f) == FS); /* just in case modem FS every changes */
+    int   fsm   = freedv_get_modem_sample_rate(f);     /* modem sample rate                                   */
+    int   n8m   = freedv_get_n_nom_modem_samples(f);   /* nominal modem sample buffer size at fsm sample rate */
+    int   n48   = n8m*FS48/fsm;                        /* nominal modem sample buffer size at 48kHz           */
+    
+    printf("fsm: %d n8m: %d n48: %d\n", fsm, n8m, n48);
+
+    short stereo[2*n48];                               /* stereo I/O buffer from port audio                   */
+    short rx48k[n48], tx48k[n48];                      /* signals at 48 kHz                                   */
+    short rxfsm[n48];                                  /* rx signal at modem sample rate                      */
+
     freedv_set_callback_txt(f, callbackNextRxChar, callbackNextTxChar, NULL);
 
-    fifo = fifo_create(N48); assert(fifo != NULL);
+    fifo = fifo_create(4*n8m); assert(fifo != NULL);   /* fifo to smooth out variation in demod nin          */
+
+    /* states for sample rate converters */
+
     rxsrc = src_new(SRC_SINC_FASTEST, 1, &src_error); assert(rxsrc != NULL);
     txsrc = src_new(SRC_SINC_FASTEST, 1, &src_error); assert(txsrc != NULL);
     playsrc = src_new(SRC_SINC_FASTEST, 1, &src_error); assert(playsrc != NULL);
@@ -372,7 +381,7 @@ int main(int argc, char *argv[]) {
               &stream,
               &inputParameters,
               &outputParameters,
-              SAMPLE_RATE,
+              FS48,
               0,           /* let the driver decide */
               paClipOff,    
               NULL,        /* no callback, use blocking API */
@@ -407,27 +416,29 @@ int main(int argc, char *argv[]) {
 
             /* Read samples, resample to modem sample rate */
 
-            Pa_ReadStream(stream, stereo_short, N48);
+            Pa_ReadStream(stream, stereo, n48);
 
             if (inputChannels == 2) {
-                for(j=0; j<N48; j++)
-                    in48k_short[j] = stereo_short[2*j]; /* left channel only */
+                for(j=0; j<n48; j++)
+                    rx48k[j] = stereo[2*j]; /* left channel only */
             }
             else {
-                for(j=0; j<N48; j++)
-                    in48k_short[j] = stereo_short[j]; 
+                for(j=0; j<n48; j++)
+                    rx48k[j] = stereo[j]; 
             }
-            int n8k = resample(rxsrc, in8k_short, in48k_short, FS, SAMPLE_RATE, N48, N48);
-
-            fifo_write(fifo, in8k_short, n8k);
+            //printf("fsm: %d FS48: %d n8m: %d n48: %d\n", fsm, FS48, n8m, n48);
+            int n8m_out = resample(rxsrc, rxfsm, rx48k, fsm, FS48, n8m, n48);
+            
+            fifo_write(fifo, rxfsm, n8m_out);
 
             /* demodulate to decoded speech samples */
 
             nin = freedv_nin(f);
-            if (fifo_read(fifo, demod_in, nin) == 0) {
+            //printf("n8m_out: %d fifo_used: %d nin: %d\n", n8m_out, fifo_used(fifo), nin);
+            while (fifo_read(fifo, demod_in, nin) == 0) {
                 freedv_rx(f, speech_out, demod_in);
                 freedv_get_modem_stats(f, &sync, &snr_est);
-             }
+            }
         }
 
         if (state == STX) {
@@ -437,12 +448,12 @@ int main(int argc, char *argv[]) {
             /* TODO: assert PTT, e.g. via RS232 */
             
             if (sfPlayFile != NULL) {
-                /* resample sound file as can't guarantee 8KHz sample rate */
+                /* resample input sound file as can't guarantee 8KHz sample rate */
 
-                unsigned int nsf = freedv_get_n_speech_samples(f)*sfFs/FS;
-                short        insf_short[nsf];
-                unsigned int n = sf_read_short(sfPlayFile, insf_short, nsf);
-                n8k = resample(playsrc, speech_in, insf_short, FS, sfFs, freedv_get_n_speech_samples(f), nsf);
+                unsigned int nsf = freedv_get_n_speech_samples(f)*sfFs/FS8;
+                short        insf[nsf];
+                unsigned int n = sf_read_short(sfPlayFile, insf, nsf);
+                n8k = resample(playsrc, speech_in, insf, FS8, sfFs, freedv_get_n_speech_samples(f), nsf);
 
                 //fwrite(speech_in, sizeof(short), freedv_get_n_nom_modem_samples(f), ftmp);
 
@@ -456,20 +467,20 @@ int main(int argc, char *argv[]) {
             freedv_tx(f, mod_out, speech_in);
             //fwrite(mod_out, sizeof(short), freedv_get_n_nom_modem_samples(f), ftmp);
 
-            int n48k = resample(txsrc, out48k_short, mod_out, SAMPLE_RATE, FS, N48, freedv_get_n_nom_modem_samples(f));
-            printf("n48k: %d N48: %d n_nom: %d\n", n48k, N48, freedv_get_n_nom_modem_samples(f));
-            fwrite(out48k_short, sizeof(short), n48k, ftmp);
-            for(j=0; j<n48k; j++) {
+            int n48_out = resample(txsrc, tx48k, mod_out, FS48, fsm, n48, n8m);
+            //printf("n48_out: %d n48: %d n_nom: %d\n", n48_out, n48, n8m);
+            fwrite(tx48k, sizeof(short), n48_out, ftmp);
+            for(j=0; j<n48_out; j++) {
                 if (outputChannels == 2) {
-                    stereo_short[2*j] = out48k_short[j];   // left channel
-                    stereo_short[2*j+1] = out48k_short[j]; // right channel
+                    stereo[2*j] = tx48k[j];   // left channel
+                    stereo[2*j+1] = tx48k[j]; // right channel
                 }
                 else {
-                    stereo_short[j] = out48k_short[j];     // mono
+                    stereo[j] = tx48k[j];     // mono
                 }
             }
 
-            Pa_WriteStream(stream, stereo_short, n48k);
+            Pa_WriteStream(stream, stereo, n48_out);
         }
 
         /* state machine processing */
