@@ -16,23 +16,26 @@
   [X] 48 to 8 kHz sample rate conversion
   [X] Port Audio list devices
   [X] command line processing framework
-  [ ] alsa loop to test with wave files
   [X] beacon state machine
+  [X] install codec2
+  [ ] debug sound dongle
+      [ ] modify for half duplex
+      [ ] sample rate option
   [ ] rotating log
   [ ] RS232 tx code
   [ ] writing to wave files
   [ ] basic SM1000 version
       + has audio interfaces 
-  [ ] test mode to tx straight away then end
+  [ ] test mode to tx straight away then end, to check levels, debug RS232
+  [ ] sound dongle/8-bit audio
 
   Building:
-
-    gcc freebeacon.c -o freebeacon -lsamplerate -lportaudio -lsndfile -I/home/david/codec2-dev/src /home/david/codec2-dev/build_linux/src/libcodec2.so
+    Note you need the libraries on the gcc line installed (TODO find apt-get package names)
+    gcc -I/usr/local/include/codec2 freebeacon.c -o freebeacon -lsamplerate -lportaudio -lsndfile -lcodec2
 
   Running:
-    LD_LIBRARY_PATH=/home/david/codec2-dev/build_linux/src/ ./freebeacon
+    ./freebeacon
 
-  (note I really should "make install" Codec 2 and have a proper cmake file)
 */
 
 #include <assert.h>
@@ -52,7 +55,8 @@
 #define MAX_CHAR            80
 #define FS8                 8000                // codec audio sample rate fixed at 8 kHz
 #define FS48                48000               // 48 kHz sampling rate rec. as we can trust accuracy of sound card
-#define SYNC_FRAMES         50                  // frames of valid rx
+#define SYNC_FRAMES         50                  // frames of valid rx sync we need to see to change state
+#define UNSYNC_FRAMES       25                  // frames of lost sync we need to see to change state
 
 /* globals used to communicate with async events */
 
@@ -128,15 +132,15 @@ void listAudioDevices(void) {
     int                 numDevices, devn;
 
     numDevices = Pa_GetDeviceCount();
-    printf("Num                                     Name      API   InCh  OutCh  DefFs\n");
-    printf("==========================================================================\n");
+    printf("Num                                               Name      API   InCh  OutCh  DefFs\n");
+    printf("====================================================================================\n");
     for (devn = 0; devn<numDevices; devn++) {
         deviceInfo = Pa_GetDeviceInfo(devn);
         if (deviceInfo == NULL) {
             fprintf(stderr, "Couldn't open devNum: %d\n", devn);
             return;
         }
-        printf(" %2d %40s %8s %6d %6d %6d\n", 
+        printf(" %2d %50s %8s %6d %6d %6d\n", 
                devn, 
                deviceInfo->name,
                Pa_GetHostApiInfo(deviceInfo->hostApi)->name,
@@ -167,6 +171,8 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 			option_parameters = " callsign (returned in text str to tx)";
                 } else if (strcmp("txfilename", long_options[i].name) == 0) {
 			option_parameters = " wavefile (to use for source audio on tramsmit)";
+                } else if (strcmp("samplerate", long_options[i].name) == 0) {
+			option_parameters = " sampleRateHz (audio device sample rate)";
                 }
 		fprintf(stderr, "\t--%s%s\n", long_options[i].name, option_parameters);
 	}
@@ -205,8 +211,9 @@ void callbackNextRxChar(void *callback_state, char c) {
 
 char callbackNextTxChar(void *callback_state) {
     if ((*ptxtMsg == 0) || ((ptxtMsg - txtMsg) >= MAX_CHAR))
-        ptxtMsg == txtMsg;
+        ptxtMsg = txtMsg;
 
+    //fprintf(stderr, "TX txtMsg: %d %c\n", (int)*ptxtMsg, *ptxtMsg);
     return *ptxtMsg++;
 }
 
@@ -244,7 +251,8 @@ int main(int argc, char *argv[]) {
     char                txFileName[MAX_CHAR];
     SNDFILE            *sfPlayFile;
     int                 sfFs;
-    int                 triggerf, txfilenamef, callsignf;
+    int                 fssc;                 
+    int                 triggerf, txfilenamef, callsignf, sampleratef;
     int                 sync;
     char                callsign[MAX_CHAR];
     FILE               *ftmp;
@@ -258,6 +266,7 @@ int main(int argc, char *argv[]) {
     /* Defaults -------------------------------------------------------------------------------*/
 
     devNum = 0;
+    fssc = FS48;
     sprintf(triggerString, "FreeBeacon");
     sprintf(txFileName, "txaudio.wav");
     sprintf(callsign, "FreeBeacon");
@@ -275,6 +284,7 @@ int main(int argc, char *argv[]) {
         { "trigger", required_argument, &triggerf, 1 },
         { "txfilename", required_argument, &txfilenamef, 1 },
         { "callsign", required_argument, &callsignf, 1 },
+        { "samplerate", required_argument, &sampleratef, 1 },
         { "list", no_argument, NULL, 'l' },
         { "help", no_argument, NULL, 'h' },
         { NULL, no_argument, NULL, 0 }
@@ -298,6 +308,8 @@ int main(int argc, char *argv[]) {
                 strcpy(txFileName, optarg);
             } else if(strcmp(long_options[option_index].name, "callsign") == 0) {
                 strcpy(callsign, optarg);
+            } else if (strcmp(long_options[option_index].name, "samplerate") == 0) {
+                fssc = atoi(optarg);
             }
             break;
 
@@ -322,7 +334,7 @@ int main(int argc, char *argv[]) {
     f = freedv_open(FREEDV_MODE_1600); assert(f != NULL);
     int   fsm   = freedv_get_modem_sample_rate(f);     /* modem sample rate                                   */
     int   n8m   = freedv_get_n_nom_modem_samples(f);   /* nominal modem sample buffer size at fsm sample rate */
-    int   n48   = n8m*FS48/fsm;                        /* nominal modem sample buffer size at 48kHz           */
+    int   n48   = n8m*fssc/fsm;                        /* nominal modem sample buffer size at 48kHz           */
     
     printf("fsm: %d n8m: %d n48: %d\n", fsm, n8m, n48);
 
@@ -340,7 +352,7 @@ int main(int argc, char *argv[]) {
     txsrc = src_new(SRC_SINC_FASTEST, 1, &src_error); assert(txsrc != NULL);
     playsrc = src_new(SRC_SINC_FASTEST, 1, &src_error); assert(playsrc != NULL);
 
-    /* Open Port Audio device */
+    /* Open Port Audio device and set up config structures */
 
     deviceInfo = Pa_GetDeviceInfo(devNum);
     if (deviceInfo == NULL) {
@@ -373,15 +385,13 @@ int main(int argc, char *argv[]) {
     outputParameters.suggestedLatency = Pa_GetDeviceInfo( outputParameters.device )->defaultHighOutputLatency;
     outputParameters.hostApiSpecificStreamInfo = NULL;
 
-    fprintf(stderr, "Ctrl-C to exit\n");
-    fprintf(stderr, "trigger string: %s txFileName: %s\n", triggerString, txFileName);
-    fprintf(stderr, "Starting PortAudio on devNum: %d\n", devNum);
+    /* open port audio for input */
 
     err = Pa_OpenStream(
               &stream,
               &inputParameters,
-              &outputParameters,
-              FS48,
+              NULL,
+              fssc,
               0,           /* let the driver decide */
               paClipOff,    
               NULL,        /* no callback, use blocking API */
@@ -397,6 +407,10 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Couldn't start sound device\n");       
         return;
     }
+
+    fprintf(stderr, "Ctrl-C to exit\n");
+    fprintf(stderr, "trigger string: %s  txFileName: %s\n", triggerString, txFileName);
+    fprintf(stderr, "PortAudio devNum: %d  samplerate: %d\n", devNum, fssc);
 
     signal(SIGINT, intHandler);  /* ctrl-C to exit gracefully */
 
@@ -426,8 +440,8 @@ int main(int argc, char *argv[]) {
                 for(j=0; j<n48; j++)
                     rx48k[j] = stereo[j]; 
             }
-            //printf("fsm: %d FS48: %d n8m: %d n48: %d\n", fsm, FS48, n8m, n48);
-            int n8m_out = resample(rxsrc, rxfsm, rx48k, fsm, FS48, n8m, n48);
+            //printf("fsm: %d fssc: %d n8m: %d n48: %d\n", fsm, fssc, n8m, n48);
+            int n8m_out = resample(rxsrc, rxfsm, rx48k, fsm, fssc, n8m, n48);
             
             fifo_write(fifo, rxfsm, n8m_out);
 
@@ -467,7 +481,7 @@ int main(int argc, char *argv[]) {
             freedv_tx(f, mod_out, speech_in);
             //fwrite(mod_out, sizeof(short), freedv_get_n_nom_modem_samples(f), ftmp);
 
-            int n48_out = resample(txsrc, tx48k, mod_out, FS48, fsm, n48, n8m);
+            int n48_out = resample(txsrc, tx48k, mod_out, fssc, fsm, n48, n8m);
             //printf("n48_out: %d n48: %d n_nom: %d\n", n48_out, n48, n8m);
             fwrite(tx48k, sizeof(short), n48_out, ftmp);
             for(j=0; j<n48_out; j++) {
@@ -522,7 +536,7 @@ int main(int argc, char *argv[]) {
         case SRX_MAYBE_UNSYNC:
             if (!sync) {
                 sync_counter++;
-                if (sync_counter == SYNC_FRAMES) {
+                if (sync_counter == UNSYNC_FRAMES) {
                     /* we really are out of sync */
                     if (triggered) {
                         /* kick off a tx if triggered */
@@ -536,6 +550,39 @@ int main(int argc, char *argv[]) {
                         ptxtMsg = txtMsg;
                         sfPlayFile = openPlayFile(txFileName, &sfFs);
 
+                        /* Shut down port audio input process */
+
+                        err = Pa_StopStream(stream);
+                        if (err != paNoError) {
+                            fprintf(stderr, "Couldn't stop sound device\n");       
+                            exit(1);
+                        }
+                        Pa_CloseStream(stream);
+
+                        /* open port audio for output */
+
+                        err = Pa_OpenStream(
+                                            &stream,
+                                            NULL,
+                                            &outputParameters,
+                                            fssc,
+                                            0,           /* let the driver decide */
+                                            paClipOff,    
+                                            NULL,        /* no callback, use blocking API */
+                                            NULL ); 
+
+                        if (err != paNoError) {
+                            fprintf(stderr, "Couldn't initialise sound device\n");       
+                            exit(1);
+                        }
+
+                        err = Pa_StartStream(stream);
+
+                        if (err != paNoError) {
+                            fprintf(stderr, "Couldn't start sound device\n");       
+                            exit(1);
+                        }
+
                         next_state = STX;
                     }
                     else {
@@ -547,8 +594,41 @@ int main(int argc, char *argv[]) {
                 next_state = SRX_SYNC; /* sync is back so false alarm */
             break;
         case STX:
-            if (sfPlayFile == NULL)
+            if (sfPlayFile == NULL) {
+                /* Shut down port audio output process */
+
+                err = Pa_StopStream(stream);
+                if (err != paNoError) {
+                    fprintf(stderr, "Couldn't stop sound device\n");       
+                    exit(1);
+                }
+                Pa_CloseStream(stream);
+
+                /* open port audio for input */
+
+                err = Pa_OpenStream(
+                                    &stream,
+                                    &inputParameters,
+                                    NULL,
+                                    fssc,
+                                    0,           /* let the driver decide */
+                                    paClipOff,    
+                                    NULL,        /* no callback, use blocking API */
+                                    NULL ); 
+
+                if (err != paNoError) {
+                    fprintf(stderr, "Couldn't initialise sound device\n");       
+                    exit(1);
+                }
+
+                err = Pa_StartStream(stream);
+                if (err != paNoError) {
+                    fprintf(stderr, "Couldn't start sound device\n");       
+                    return;
+                }
+
                 next_state = SRX_IDLE;
+            }
             break;
         }
 
@@ -564,14 +644,6 @@ int main(int argc, char *argv[]) {
         state = next_state;
     }
 
-    /* Attempt to shut down gracefully */
-
-    err = Pa_StopStream(stream);
-    if (err != paNoError) {
-        fprintf(stderr, "Couldn't stop sound device\n");       
-        exit(1);
-    }
-    Pa_CloseStream(stream);
     Pa_Terminate();
     fifo_destroy(fifo);
     src_delete(rxsrc);
