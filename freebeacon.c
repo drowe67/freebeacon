@@ -4,10 +4,11 @@
   Created Dec 2015
 
   FreeDV beacon daemon.  Listens for freedv signals, then transmits a
-  reply.  Saves received signals as a rotating log of wave files so
-  they can be published on a web site.
+  reply.  Saves received signal from radio and decoded audio as wavefiles
+  so they can be saved to a web site.
 
-  If stereo audio device we use left channel only.
+  If stereo audio device we use left channel only.  RTS and DTR is
+  rasised on Tx to trigger Radio PTT.
 
   A whole lot of code was lifted from freedv-dev for this program.
 
@@ -18,16 +19,20 @@
   [X] command line processing framework
   [X] beacon state machine
   [X] install codec2
-  [ ] debug sound dongle
-      [ ] modify for half duplex
-      [ ] sample rate option
-  [ ] rotating log
-  [ ] RS232 tx code
-  [ ] writing to wave files
+  [X] attempt debug sound dongle
+      [X] modify for half duplex
+      [X] sample rate option
+      [X] prog sound dongle debug
+  [X] RS232 PTT code
+  [X] writing to wave files
+  [ ] test mode to tx straight away then end, to check levels, debug RS232
+  [ ] test OTA
+  [ ] OTA on RPi
+  [ ] writing text string to a web page (cat, create if doesn't exist)
+  [ ] samples from stdin option to work from sdr
+  [ ] option to not tx, just log info, for rx only stations
   [ ] basic SM1000 version
       + has audio interfaces 
-  [ ] test mode to tx straight away then end, to check levels, debug RS232
-  [ ] sound dongle/8-bit audio
 
   Building:
     Note you need the libraries on the gcc line installed (TODO find apt-get package names)
@@ -42,6 +47,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <time.h>
+#include <ctype.h>
+
 #include <samplerate.h>
 #include <getopt.h>
 
@@ -57,6 +69,8 @@
 #define FS48                48000               // 48 kHz sampling rate rec. as we can trust accuracy of sound card
 #define SYNC_FRAMES         50                  // frames of valid rx sync we need to see to change state
 #define UNSYNC_FRAMES       25                  // frames of lost sync we need to see to change state
+#define PEAK_COUNTER        10                  // how often to report peak input level 
+#define COM_HANDLE_INVALID  -1
 
 /* globals used to communicate with async events */
 
@@ -64,6 +78,7 @@ volatile int keepRunning;
 char txtMsg[MAX_CHAR], *ptxtMsg, triggerString[MAX_CHAR];
 int triggered;
 float snr_est, snr_sample;
+int com_handle;
 
 /* state machine defines */
 
@@ -81,6 +96,13 @@ char *state_str[] = {
     "Tx"
 };
 
+
+int openComPort(const char *name);
+void closeComPort(void);
+void raiseDTR(void);
+void lowerDTR(void);
+void raiseRTS(void);
+void lowerRTS(void);
 
 /* Called on Ctrl-C */
 
@@ -128,7 +150,6 @@ int resample(SRC_STATE *src,
 
 void listAudioDevices(void) {
     const PaDeviceInfo *deviceInfo = NULL;
-    PaError             err;
     int                 numDevices, devn;
 
     numDevices = Pa_GetDeviceCount();
@@ -159,7 +180,9 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 	fprintf(stderr, "\nFreeBeacon - FreeDV Beacon\n"
 		"usage: %s [OPTIONS]\n\n"
                 "Options:\n"
-                "\t-l --list (audio devices)\n", argv[0]);
+                "\t-l --list (audio devices)\n"
+                "\t-c        (comm port for Tx PTT)\n"
+                "\t-v        (verbose)\n", argv[0]);
         for(i=0; i<num_opts-1; i++) {
 		if(long_options[i].has_arg == no_argument) {
 			option_parameters="";
@@ -236,27 +259,50 @@ SNDFILE *openPlayFile(char fileName[], int *sfFs)
 }
 
   
+SNDFILE *openRecFile(char fileName[], int sfFs)
+{
+    SF_INFO  sfInfo;
+    SNDFILE *sfRecFile;
+
+    sfInfo.format     = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+    sfInfo.channels   = 1;
+    sfInfo.samplerate = sfFs;
+
+    sfRecFile = sf_open(fileName, SFM_WRITE, &sfInfo);
+    if(sfRecFile == NULL) {
+        const char *strErr = sf_strerror(NULL);
+        fprintf(stderr, " %s Couldn't open: %s\n", strErr, fileName);
+    }
+
+    return sfRecFile;
+}
+
+  
+
+
 int main(int argc, char *argv[]) {
     struct freedv      *f;
+    PaError             err;
     PaStreamParameters  inputParameters, outputParameters;
     const PaDeviceInfo *deviceInfo = NULL;
     PaStream           *stream = NULL;
-    PaError             err;
-    int                 numDevices, nBufs, n8k, i, j, src_error, inputChannels, nin, devNum;
+    int                 n8k, j, src_error, inputChannels, nin, devNum;
     int                 outputChannels;
     int                 state, next_state;
     SRC_STATE          *rxsrc, *txsrc;
     SRC_STATE          *playsrc;
     struct FIFO        *fifo;
     char                txFileName[MAX_CHAR];
-    SNDFILE            *sfPlayFile;
+    SNDFILE            *sfPlayFile, *sfRecFileFromRadio, *sfRecFileDecAudio;
     int                 sfFs;
     int                 fssc;                 
     int                 triggerf, txfilenamef, callsignf, sampleratef;
-    int                 sync;
+    int                 sync, verbose;
+    char                commport[MAX_CHAR];
     char                callsign[MAX_CHAR];
     FILE               *ftmp;
-    unsigned int        sync_counter;
+    unsigned int        sync_counter, peakCounter;
+    unsigned int        tnout,mnout;
 
     /* debug raw file */
 
@@ -270,6 +316,9 @@ int main(int argc, char *argv[]) {
     sprintf(triggerString, "FreeBeacon");
     sprintf(txFileName, "txaudio.wav");
     sprintf(callsign, "FreeBeacon");
+    verbose = 0;
+    com_handle = COM_HANDLE_INVALID;
+    mnout = 60*FS8;
 
     if (Pa_Initialize()) {
         fprintf(stderr, "Port Audio failed to initialize");
@@ -278,7 +327,7 @@ int main(int argc, char *argv[]) {
  
     /* Process command line options -----------------------------------------------------------*/
 
-    char* opt_string = "hl";
+    char* opt_string = "hlvc";
     struct option long_options[] = {
         { "dev", required_argument, &devNum, 1 },
         { "trigger", required_argument, &triggerf, 1 },
@@ -313,8 +362,20 @@ int main(int argc, char *argv[]) {
             }
             break;
 
+        case 'c':
+            strcpy(commport, optarg);
+            if (openComPort(commport) != 0) {
+                fprintf(stderr, "Can't topne comm port: %s\n",commport);
+                exit(1);
+            }
+            break;
+
         case 'h':
             printHelp(long_options, num_opts, argv);
+            break;
+
+        case 'v':
+            verbose = 1;
             break;
 
         case 'l':
@@ -328,7 +389,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-
     /* Open Sound Device and start processing --------------------------------------------------------------*/
 
     f = freedv_open(FREEDV_MODE_1600); assert(f != NULL);
@@ -336,7 +396,8 @@ int main(int argc, char *argv[]) {
     int   n8m   = freedv_get_n_nom_modem_samples(f);   /* nominal modem sample buffer size at fsm sample rate */
     int   n48   = n8m*fssc/fsm;                        /* nominal modem sample buffer size at 48kHz           */
     
-    printf("fsm: %d n8m: %d n48: %d\n", fsm, n8m, n48);
+    if (verbose)
+        fprintf(stderr, "fsm: %d n8m: %d n48: %d\n", fsm, n8m, n48);
 
     short stereo[2*n48];                               /* stereo I/O buffer from port audio                   */
     short rx48k[n48], tx48k[n48];                      /* signals at 48 kHz                                   */
@@ -385,12 +446,12 @@ int main(int argc, char *argv[]) {
     outputParameters.suggestedLatency = Pa_GetDeviceInfo( outputParameters.device )->defaultHighOutputLatency;
     outputParameters.hostApiSpecificStreamInfo = NULL;
 
-    /* open port audio for input */
+    /* open port audio for full duplex operation */
 
     err = Pa_OpenStream(
               &stream,
               &inputParameters,
-              NULL,
+              &outputParameters,
               fssc,
               0,           /* let the driver decide */
               paClipOff,    
@@ -405,7 +466,7 @@ int main(int argc, char *argv[]) {
     err = Pa_StartStream(stream);
     if (err != paNoError) {
         fprintf(stderr, "Couldn't start sound device\n");       
-        return;
+        exit(1);
     }
 
     fprintf(stderr, "Ctrl-C to exit\n");
@@ -421,6 +482,10 @@ int main(int argc, char *argv[]) {
     *txtMsg = 0;
     ptxtMsg = txtMsg;
     triggered = 0;
+    peakCounter = 0;
+    if (com_handle != COM_HANDLE_INVALID) {
+        lowerRTS(); lowerDTR();
+    }
 
     while(keepRunning) {
 
@@ -440,9 +505,22 @@ int main(int argc, char *argv[]) {
                 for(j=0; j<n48; j++)
                     rx48k[j] = stereo[j]; 
             }
+            //printf("%d\n", rx48k[0]);
             //printf("fsm: %d fssc: %d n8m: %d n48: %d\n", fsm, fssc, n8m, n48);
             int n8m_out = resample(rxsrc, rxfsm, rx48k, fsm, fssc, n8m, n48);
-            
+            //fwrite(rxfsm, sizeof(short), n8m, ftmp);
+          
+            if (verbose) {
+                short peak = 0;
+                for (j=0; j<n8m_out; j++)
+                    if (rxfsm[j] > peak)
+                        peak = rxfsm[j];
+                if (peakCounter++ == PEAK_COUNTER) {
+                    peakCounter = 0;
+                    fprintf(stderr, "peak: %d\n", peak);
+                }
+            }
+
             fifo_write(fifo, rxfsm, n8m_out);
 
             /* demodulate to decoded speech samples */
@@ -450,8 +528,18 @@ int main(int argc, char *argv[]) {
             nin = freedv_nin(f);
             //printf("n8m_out: %d fifo_used: %d nin: %d\n", n8m_out, fifo_used(fifo), nin);
             while (fifo_read(fifo, demod_in, nin) == 0) {
-                freedv_rx(f, speech_out, demod_in);
+                int nout = freedv_rx(f, speech_out, demod_in);
                 freedv_get_modem_stats(f, &sync, &snr_est);
+
+                if (sfRecFileFromRadio)
+                    sf_write_short(sfRecFileFromRadio, demod_in, nin);
+                if (sfRecFileDecAudio)
+                    sf_write_short(sfRecFileDecAudio, speech_out, nout);
+                tnout += nout;
+                if (tnout > mnout) {
+                    sf_close(sfRecFileFromRadio);
+                    sf_close(sfRecFileDecAudio);
+                }
             }
         }
 
@@ -483,7 +571,7 @@ int main(int argc, char *argv[]) {
 
             int n48_out = resample(txsrc, tx48k, mod_out, fssc, fsm, n48, n8m);
             //printf("n48_out: %d n48: %d n_nom: %d\n", n48_out, n48, n8m);
-            fwrite(tx48k, sizeof(short), n48_out, ftmp);
+            //fwrite(tx48k, sizeof(short), n48_out, ftmp);
             for(j=0; j<n48_out; j++) {
                 if (outputChannels == 2) {
                     stereo[2*j] = tx48k[j];   // left channel
@@ -517,7 +605,28 @@ int main(int argc, char *argv[]) {
             if (sync) {
                 sync_counter++;
                 if (sync_counter == SYNC_FRAMES) {
-                    /* we really are in sync */
+                    /* OK we really are in sync */
+
+                    /* kick off recording of two files */
+
+                    time_t ltime;     /* calendar time */
+                    ltime=time(NULL); /* get current cal time */
+                    char timeStr[MAX_CHAR];
+                    sprintf(timeStr, "%s",asctime( localtime(&ltime) ) );
+                    int i=0;
+                    unsigned char str[]="a ";
+                    while (str[i]) {
+                        if (isspace(str[i])) 
+                            str[i]='_';
+                        i++;
+                    }
+                    char recFileFromRadioName[MAX_CHAR], recFileDecAudioName[MAX_CHAR];
+                    sprintf(recFileFromRadioName,"%s_from_radio.wav", timeStr);
+                    sprintf(recFileDecAudioName,"%s_decoded_speech.wav", timeStr);
+                    sfRecFileFromRadio = openRecFile(recFileFromRadioName, fsm);
+                    sfRecFileDecAudio = openRecFile(recFileDecAudioName, FS8);
+                    tnout = 0;
+
                     next_state = SRX_SYNC;
                 }
             }
@@ -526,7 +635,7 @@ int main(int argc, char *argv[]) {
             break;
         case SRX_SYNC:
             sync_counter++;
-            if ((sync_counter % SYNC_FRAMES) == 0)
+            if (((sync_counter % SYNC_FRAMES) == 0) && verbose)
                 fprintf(stderr, "sync: %d snr: %3.1f\n", sync, snr_est);                
             if (!sync) {
                 sync_counter = 0;
@@ -538,8 +647,17 @@ int main(int argc, char *argv[]) {
                 sync_counter++;
                 if (sync_counter == UNSYNC_FRAMES) {
                     /* we really are out of sync */
+
+                    /* finish up any open recording files */
+
+                    if (sfRecFileFromRadio)
+                        sf_close(sfRecFileFromRadio);
+                    if (sfRecFileDecAudio)
+                        sf_close(sfRecFileDecAudio);
+
+                    /* kick off a tx if triggered */
+
                     if (triggered) {
-                        /* kick off a tx if triggered */
                         float ber = (float)freedv_get_total_bit_errors(f)/freedv_get_total_bits(f);
                         char tmpStr[MAX_CHAR];
 
@@ -550,40 +668,10 @@ int main(int argc, char *argv[]) {
                         ptxtMsg = txtMsg;
                         sfPlayFile = openPlayFile(txFileName, &sfFs);
 
-                        /* Shut down port audio input process */
-
-                        err = Pa_StopStream(stream);
-                        if (err != paNoError) {
-                            fprintf(stderr, "Couldn't stop sound device\n");       
-                            exit(1);
+                        if (com_handle != COM_HANDLE_INVALID) {
+                            raiseRTS(); raiseDTR();
                         }
-                        Pa_CloseStream(stream);
-
-                        /* open port audio for output */
-
-                        err = Pa_OpenStream(
-                                            &stream,
-                                            NULL,
-                                            &outputParameters,
-                                            fssc,
-                                            0,           /* let the driver decide */
-                                            paClipOff,    
-                                            NULL,        /* no callback, use blocking API */
-                                            NULL ); 
-
-                        if (err != paNoError) {
-                            fprintf(stderr, "Couldn't initialise sound device\n");       
-                            exit(1);
-                        }
-
-                        err = Pa_StartStream(stream);
-
-                        if (err != paNoError) {
-                            fprintf(stderr, "Couldn't start sound device\n");       
-                            exit(1);
-                        }
-
-                        next_state = STX;
+                       next_state = STX;
                     }
                     else {
                         next_state = SRX_IDLE;
@@ -595,38 +683,10 @@ int main(int argc, char *argv[]) {
             break;
         case STX:
             if (sfPlayFile == NULL) {
-                /* Shut down port audio output process */
 
-                err = Pa_StopStream(stream);
-                if (err != paNoError) {
-                    fprintf(stderr, "Couldn't stop sound device\n");       
-                    exit(1);
+                if (com_handle != COM_HANDLE_INVALID) {
+                    raiseRTS(); raiseDTR();
                 }
-                Pa_CloseStream(stream);
-
-                /* open port audio for input */
-
-                err = Pa_OpenStream(
-                                    &stream,
-                                    &inputParameters,
-                                    NULL,
-                                    fssc,
-                                    0,           /* let the driver decide */
-                                    paClipOff,    
-                                    NULL,        /* no callback, use blocking API */
-                                    NULL ); 
-
-                if (err != paNoError) {
-                    fprintf(stderr, "Couldn't initialise sound device\n");       
-                    exit(1);
-                }
-
-                err = Pa_StartStream(stream);
-                if (err != paNoError) {
-                    fprintf(stderr, "Couldn't start sound device\n");       
-                    return;
-                }
-
                 next_state = SRX_IDLE;
             }
             break;
@@ -634,21 +694,136 @@ int main(int argc, char *argv[]) {
 
         /* filter out IDLE->MAYBE_SYNC as this fires on channel noise all the time */
 
-        int quiet = 0;
-        if ((state == SRX_IDLE) && (next_state == SRX_MAYBE_SYNC))
-            quiet = 1;
-        if ((state == SRX_MAYBE_SYNC) && (next_state == SRX_IDLE))
-            quiet = 1;
-        if ((next_state != state) && !quiet) 
+        if ((next_state != state) && verbose) 
             fprintf(stderr, "state: %-20s next_state: %-20s\n", state_str[state], state_str[next_state]);
         state = next_state;
     }
 
+    /* Shut down port audio */
+
+    err = Pa_StopStream(stream);
+    if (err != paNoError) {
+        fprintf(stderr, "Couldn't stop sound device\n");       
+        exit(1);
+    }
+    Pa_CloseStream(stream);
     Pa_Terminate();
+
     fifo_destroy(fifo);
     src_delete(rxsrc);
     src_delete(txsrc);
     src_delete(playsrc);
     freedv_close(f);
     fclose(ftmp);
+
+    return 0;
 }
+
+
+/* Comm port fuctions lifted from FreeDV -------------------------------------------------------------------*/
+
+//----------------------------------------------------------------
+// openComPort() opens the com port specified by the string
+// ie: "/dev/ttyUSB0" 
+//----------------------------------------------------------------
+
+int openComPort(const char *name)
+{
+    if(com_handle != COM_HANDLE_INVALID)
+        closeComPort();
+
+    {
+        struct termios t;
+
+        if((com_handle=open(name, O_NONBLOCK|O_RDWR))==COM_HANDLE_INVALID)
+            return -1;
+
+        if(tcgetattr(com_handle, &t)==-1) {
+            close(com_handle);
+            com_handle = COM_HANDLE_INVALID;
+            return -1;
+        }
+
+        t.c_iflag = (
+                     IGNBRK   /* ignore BREAK condition */
+                     | IGNPAR   /* ignore (discard) parity errors */
+                     );
+        t.c_oflag = 0;	/* No output processing */
+        t.c_cflag = (
+                     CS8         /* 8 bits */
+                     | CREAD       /* enable receiver */
+                     /*
+                       Fun snippet from the FreeBSD manpage:
+
+                       If CREAD is set, the receiver is enabled.  Otherwise, no character is
+                       received.  Not all hardware supports this bit.  In fact, this flag is
+                       pretty silly and if it were not part of the termios specification it
+                       would be omitted.
+                     */
+                     | CLOCAL      /* ignore modem status lines */
+                     );
+        t.c_lflag = 0;	/* No local modes */
+        if(tcsetattr(com_handle, TCSANOW, &t)==-1) {
+            close(com_handle);
+            com_handle = COM_HANDLE_INVALID;
+            return -1;
+        }
+		
+    }
+
+    return 0;
+}
+
+void closeComPort(void)
+{
+    close(com_handle);
+    com_handle = COM_HANDLE_INVALID;
+}
+
+//----------------------------------------------------------------
+// (raise|lower)(RTS|DTR)()
+//
+// Raises/lowers the specified signal
+//----------------------------------------------------------------
+
+void raiseDTR(void)
+{
+    if(com_handle == COM_HANDLE_INVALID)
+        return;
+    {	// For C89 happiness
+        int flags = TIOCM_DTR;
+        ioctl(com_handle, TIOCMBIS, &flags);
+    }
+}
+
+
+void raiseRTS(void)
+{
+    if(com_handle == COM_HANDLE_INVALID)
+        return;
+    {	// For C89 happiness
+        int flags = TIOCM_RTS;
+        ioctl(com_handle, TIOCMBIS, &flags);
+    }
+}
+
+void lowerDTR(void)
+{
+    if(com_handle == COM_HANDLE_INVALID)
+        return;
+    {	// For C89 happiness
+        int flags = TIOCM_DTR;
+        ioctl(com_handle, TIOCMBIC, &flags);
+    }
+}
+
+void lowerRTS(void)
+{
+    if(com_handle == COM_HANDLE_INVALID)
+        return;
+    {	// For C89 happiness
+        int flags = TIOCM_RTS;
+        ioctl(com_handle, TIOCMBIC, &flags);
+    }
+}
+
