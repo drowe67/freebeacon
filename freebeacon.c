@@ -5,8 +5,9 @@
 
   FreeDV 1600 beacon.  Listens for FreeDV signals, then transmits a
   reply. Places the received signal files on a web server. Requires a
-  Linux machine with a sound card and RS232-PTT interface to your radio.
-  Just one sound card is required.
+  Linux machine with a sound card and RS232-PTT interface to your
+  radio.  Just one sound card is required.  Can run on machines as
+  small as a Raspberry Pi.
 
   When a "trigger" string is detected in the rx FreeDV text message
   (e.g. "hello beacon", or the beacon callsign), the beacon will
@@ -16,17 +17,21 @@
   saying "Hi, I am a FreeDV beacon blah blah".  The signal report is
   encoded into the transmit text message.  Make the wave file long
   enough so that the the signal report is repeated a few times, say 30
-  seconds. Transmit will stop when the wave file is played once.
+  seconds. Transmit will stop when the "txfilename" wave file is
+  played once.
 
   Freebeacon saves the received audio from the radio AND the decoded
-  audio as wavefiles.  The file length is limited to 60 seconds. If
-  you run freebeacon in a webserver directory these will appear on the
-  Web.  Add a cron job to your machine to clean these files up once a
-  day.
+  audio as wavefiles.  Use "wavefilewritepath" to specify where they
+  are written.  The file name is a date and time stamp. The length is
+  limited to 60 seconds. If you set "wavefilewritepath" to a listable
+  webserver directory the files will be available for download on the
+  Web.  To avoid filling your file system write a cron job to clean
+  these files up once a day.
 
-  If your input audio device is stereo note we only listen to
-  the left channel.  RTS and DTR is raised on transmit, and lowered
-  otherwise.
+  If your input audio device is stereo note we only listen to the left
+  channel.  If you have a RS232 serial port (specified with "-c") RTS
+  and DTR is raised on transmit to key your transmitter, and lowered
+  for receive.
 
   A whole lot of code was lifted from freedv-dev for this program.
 
@@ -254,6 +259,10 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 			option_parameters = " wavefile (to use for source audio on tramsmit)";
                 } else if (strcmp("samplerate", long_options[i].name) == 0) {
 			option_parameters = " sampleRateHz (audio device sample rate)";
+                } else if (strcmp("wavefilewritepath", long_options[i].name) == 0) {
+			option_parameters = " pathToWaveFiles (path to where wave files are written)";
+                } else if (strcmp("rpigpio", long_options[i].name) == 0) {
+			option_parameters = " GPIO (GPIO number on Raspberry Pi for Tx PTT)";
                 }
 		fprintf(stderr, "\t--%s%s\n", long_options[i].name, option_parameters);
 	}
@@ -337,7 +346,21 @@ SNDFILE *openRecFile(char fileName[], int sfFs)
     return sfRecFile;
 }
 
-  
+
+/* Use the Linux /sys/class/gpio system to access the RPis GPIOs */
+
+void sys_gpio(char filename[], char s[]) {
+    FILE *fgpio = fopen(filename, "wt");
+    if (fgpio == NULL) {
+        fprintf(stderr, "Problem accessing /sys/class/gpio\n");
+        exit(1);
+    }
+    fprintf(stderr,"%s %s",filename, s);
+    fprintf(fgpio,"%s",s);
+    fclose(fgpio);
+}
+
+
 /*--------------------------------------------------------------------------------------------------------*\
 
                                                   MAIN
@@ -360,7 +383,7 @@ int main(int argc, char *argv[]) {
     SNDFILE            *sfPlayFile, *sfRecFileFromRadio, *sfRecFileDecAudio;
     int                 sfFs;
     int                 fssc;                 
-    int                 triggerf, txfilenamef, callsignf, sampleratef;
+    int                 triggerf, txfilenamef, callsignf, sampleratef, wavefilepathf, rpigpiof;
     int                 sync;
     char                commport[MAX_CHAR];
     char                callsign[MAX_CHAR];
@@ -369,6 +392,8 @@ int main(int argc, char *argv[]) {
     unsigned int        tnout,mnout;
     short               peak;
     unsigned int        logCounter;
+    char                waveFileWritePath[MAX_CHAR];
+    char                rpigpio[MAX_CHAR], rpigpio_path[MAX_CHAR];
 
     /* debug raw file */
 
@@ -389,7 +414,9 @@ int main(int argc, char *argv[]) {
     *txtMsg = 0;
     sfRecFileFromRadio = NULL;
     sfRecFileDecAudio = NULL;
-    
+    *waveFileWritePath = 0;
+    *rpigpio = 0;
+
     if (Pa_Initialize()) {
         fprintf(stderr, "Port Audio failed to initialize");
         exit(1);
@@ -404,6 +431,8 @@ int main(int argc, char *argv[]) {
         { "txfilename", required_argument, &txfilenamef, 1 },
         { "callsign", required_argument, &callsignf, 1 },
         { "samplerate", required_argument, &sampleratef, 1 },
+        { "wavefilewritepath", required_argument, &wavefilepathf, 1 },
+        { "rpigpio", required_argument, &rpigpiof, 1 },
         { "list", no_argument, NULL, 'l' },
         { "help", no_argument, NULL, 'h' },
         { NULL, no_argument, NULL, 0 }
@@ -429,6 +458,17 @@ int main(int argc, char *argv[]) {
                 strcpy(callsign, optarg);
             } else if (strcmp(long_options[option_index].name, "samplerate") == 0) {
                 fssc = atoi(optarg);
+            } else if (strcmp(long_options[option_index].name, "wavefilewritepath") == 0) {
+                strcpy(waveFileWritePath, optarg);
+            } else if (strcmp(long_options[option_index].name, "rpigpio") == 0) {
+                strcpy(rpigpio, optarg);
+                sys_gpio("/sys/class/gpio/unexport", rpigpio);
+                sys_gpio("/sys/class/gpio/export", rpigpio);
+                char tmp[MAX_CHAR];
+                sprintf(tmp,"/sys/class/gpio/gpio%s/direction", rpigpio);
+                sys_gpio(tmp, "out");
+                sprintf(rpigpio_path,"/sys/class/gpio/gpio%s/value", rpigpio);
+                sys_gpio(rpigpio_path, "0");
             }
             break;
 
@@ -550,6 +590,13 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "\nCtrl-C to exit\n");
     fprintf(stderr, "trigger string: %s\ntxFileName: %s\n", triggerString, txFileName);
     fprintf(stderr, "PortAudio devNum: %d\nsamplerate: %d\n", devNum, fssc);
+    fprintf(stderr, "WaveFileWritePath: %s\n", waveFileWritePath);
+    if (com_handle != COM_HANDLE_INVALID) {
+        fprintf(stderr, "Comm Port for PTT: %s\n", commport);
+    }
+    if (*rpigpio) {
+        fprintf(stderr, "Raspberry Pi GPIO for PTT: %s\n", rpigpio);
+    }
 
     signal(SIGINT, intHandler);  /* ctrl-C to exit gracefully */
     keepRunning = 1;
@@ -560,8 +607,16 @@ int main(int argc, char *argv[]) {
     if (com_handle != COM_HANDLE_INVALID) {
         lowerRTS(); lowerDTR();
     }
+
+    /* -t flag: we are leaping straight into TX */
+
     if (state == STX) {
-        raiseRTS(); raiseDTR();
+        if (com_handle != COM_HANDLE_INVALID) {
+            raiseRTS(); raiseDTR();
+        }
+        if (*rpigpio) {
+            sys_gpio(rpigpio_path, "1");
+        }
         sfPlayFile = openPlayFile(txFileName, &sfFs);
     }
 
@@ -599,7 +654,7 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            //fifo_write(fifo, rxfsm, n8m_out);
+            fifo_write(fifo, rxfsm, n8m_out);
 
             /* demodulate to decoded speech samples */
 
@@ -698,8 +753,8 @@ int main(int argc, char *argv[]) {
                         i++;
                     }
                     char recFileFromRadioName[MAX_CHAR], recFileDecAudioName[MAX_CHAR];
-                    sprintf(recFileFromRadioName,"%s_from_radio.wav", timeStr);
-                    sprintf(recFileDecAudioName,"%s_decoded_speech.wav", timeStr);
+                    sprintf(recFileFromRadioName,"%s/%s_from_radio.wav", waveFileWritePath, timeStr);
+                    sprintf(recFileDecAudioName,"%s/%s_decoded_speech.wav", waveFileWritePath, timeStr);
                     sfRecFileFromRadio = openRecFile(recFileFromRadioName, fsm);
                     sfRecFileDecAudio = openRecFile(recFileDecAudioName, FS8);
                     tnout = 0;
@@ -746,6 +801,9 @@ int main(int argc, char *argv[]) {
                         if (com_handle != COM_HANDLE_INVALID) {
                             raiseRTS(); raiseDTR();
                         }
+                        if (*rpigpio) {
+                            sys_gpio(rpigpio_path, "1");
+                        }
                         next_state = STX;
                     }
                     else {
@@ -761,6 +819,9 @@ int main(int argc, char *argv[]) {
 
                 if (com_handle != COM_HANDLE_INVALID) {
                     lowerRTS(); lowerDTR();
+                }
+                if (*rpigpio) {
+                    sys_gpio(rpigpio_path, "0");
                 }
                 next_state = SRX_IDLE;
             }
@@ -783,7 +844,10 @@ int main(int argc, char *argv[]) {
     if (com_handle != COM_HANDLE_INVALID) {
         lowerRTS(); lowerDTR();
     }
-
+    if (*rpigpio) {
+        sys_gpio(rpigpio_path, "0");
+    }
+ 
     /* Shut down port audio */
 
     err = Pa_StopStream(stream);
