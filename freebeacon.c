@@ -47,8 +47,8 @@
   [ ] FreeDV 700 support
   [ ] daemonise
       + change all fprintfs to use log file in daemon mode
-  [ ] test OTA on laptop
-  [ ] test OTA on RPi
+  [ ] test on laptop
+  [ ] test on RPi
   [ ] writing text string to a web page (cat, create if doesn't exist)
   [ ] samples from stdin option to work from sdr
   [ ] monitor rx and tx audio on another sound device
@@ -59,8 +59,14 @@
       + has audio interfaces, PTT, so neat solution
 
   Building:
-    Note you need the libraries on the gcc line installed (TODO find apt-get package names)
+    Download and "make install && ldconfig" codec2.  On my Ubuntu 14 and RPi I had to add an extra search
+    path to the ld.conf.d directory to match the path the codec2 .so was installed in.
+
+    apt-get install libsamplerate0-dev portaudio19-dev libportaudio-dev libsndfile1-dev
     gcc -I/usr/local/include/codec2 freebeacon.c -o freebeacon -lsamplerate -lportaudio -lsndfile -lcodec2
+
+    Plug in your USB sound card and USB RS232 devices.
+    Use alsamixer to adjust levels on your sound card. 
 
   Usage:
     ./freebeacon -h
@@ -70,6 +76,18 @@
 
   Example usage:
     ./freebeacon -c /dev/ttyUSB1 --txfilename ~/codec2-dev/wav/vk5qi.wav --dev 4 -v --trigger hello
+
+  Testing sound cards on RPi:
+
+  $ arecord -l
+
+   **** List of CAPTURE Hardware Devices ****
+   card 1: Audio [RIGblaster Advantage Audio], device 0: USB Audio [USB Audio]
+     Subdevices: 1/1
+     Subdevice #0: subdevice #0
+
+  $ arecord -D hw:1,0 -f S16_LE -r 48000 test.wav
+  $ aplay test.wav
 
 */
 
@@ -510,7 +528,7 @@ int main(int argc, char *argv[]) {
               &inputParameters,
               &outputParameters,
               fssc,
-              0,           /* let the driver decide */
+              n48,         /* changed from 0 to n48 to get Rpi audio to work without clicks */ 
               paClipOff,    
               NULL,        /* no callback, use blocking API */
               NULL ); 
@@ -567,8 +585,8 @@ int main(int argc, char *argv[]) {
                 for(j=0; j<n48; j++)
                     rx48k[j] = stereo[j]; 
             }
+            //fwrite(rx48k, sizeof(short), n8m, ftmp);
             int n8m_out = resample(rxsrc, rxfsm, rx48k, fsm, fssc, n8m, n48);
-            //fwrite(rxfsm, sizeof(short), n8m, ftmp);
           
             if (verbose) {
                 /* crude input signal level meter */
@@ -581,7 +599,7 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            fifo_write(fifo, rxfsm, n8m_out);
+            //fifo_write(fifo, rxfsm, n8m_out);
 
             /* demodulate to decoded speech samples */
 
