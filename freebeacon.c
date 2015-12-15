@@ -70,12 +70,27 @@
       + add mode, state machine
       + has audio interfaces, PTT, so neat solution
 
-  Building:
-    Download and "make install && ldconfig" codec2.  On my Ubuntu 14 and RPi I had to add an extra search
-    path to the ld.conf.d directory to match the path the codec2 .so was installed in.
+  Building and Installation: 
 
-    apt-get install libsamplerate0-dev portaudio19-dev libportaudio-dev libsndfile1-dev
-    gcc -I/usr/local/include/codec2 freebeacon.c -o freebeacon -lsamplerate -lportaudio -lsndfile -lcodec2
+    sudo apt-get install subversion cmake libsamplerate0-dev portaudio19-dev libsndfile1-dev
+
+    svn co http://svn.code.sf.net/p/freetel/code/codec2-dev
+    cd codec2-dev
+    mkdir build_linux
+    cd build_linux
+    cmake ../
+    make
+    sudo make install
+
+    Note: On my Ubuntu 14 and RPi I had to add an extra search path to the
+    ld.conf.d directory to match the path the codec2 .so was installed
+    in.
+
+    ldconfig -v
+
+    svn co http://svn.code.sf.net/p/freetel/code/freebeacon
+    cd freebeacon
+    make
 
     Plug in your USB sound card and USB RS232 devices.
     Use alsamixer to adjust levels on your sound card. 
@@ -88,6 +103,9 @@
 
   Example usage:
     ./freebeacon -c /dev/ttyUSB1 --txfilename ~/codec2-dev/wav/vk5qi.wav --dev 4 -v --trigger hello
+
+  Testing your PTT by making it jump straght into tx mode:
+    ./freebeacon -c /dev/ttyUSB1 --txfilename ~/codec2-dev/wav/vk5qi.wav --dev 4 -v --trigger hello -t
 
   Testing sound cards on RPi:
 
