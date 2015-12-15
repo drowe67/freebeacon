@@ -29,9 +29,16 @@
   these files up once a day.
 
   If your input audio device is stereo note we only listen to the left
-  channel.  If you have a RS232 serial port (specified with "-c") RTS
+  channel.  
+
+  If you have a RS232 serial port (specified with "-c") RTS
   and DTR is raised on transmit to key your transmitter, and lowered
   for receive.
+
+  If you are using Raspberry Pi you can use one of the GPIOs for PTT
+  control of your transmitter using the "--rpigpio" option.  You need
+  to use the BCM GPIO number so "--rpigpio 11" uses pin 23 of the GPIO
+  connector.
 
   A whole lot of code was lifted from freedv-dev for this program.
 
@@ -52,8 +59,8 @@
   [ ] FreeDV 700 support
   [ ] daemonise
       + change all fprintfs to use log file in daemon mode
-  [ ] test on laptop
-  [ ] test on RPi
+  [X] test on laptop
+  [X] test on RPi
   [ ] writing text string to a web page (cat, create if doesn't exist)
   [ ] samples from stdin option to work from sdr
   [ ] monitor rx and tx audio on another sound device
@@ -262,7 +269,7 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
                 } else if (strcmp("wavefilewritepath", long_options[i].name) == 0) {
 			option_parameters = " pathToWaveFiles (path to where wave files are written)";
                 } else if (strcmp("rpigpio", long_options[i].name) == 0) {
-			option_parameters = " GPIO (GPIO number on Raspberry Pi for Tx PTT)";
+			option_parameters = " GPIO (BCM GPIO number on Raspberry Pi for Tx PTT)";
                 }
 		fprintf(stderr, "\t--%s%s\n", long_options[i].name, option_parameters);
 	}
@@ -351,11 +358,11 @@ SNDFILE *openRecFile(char fileName[], int sfFs)
 
 void sys_gpio(char filename[], char s[]) {
     FILE *fgpio = fopen(filename, "wt");
+    fprintf(stderr,"%s %s\n",filename, s);
     if (fgpio == NULL) {
-        fprintf(stderr, "Problem accessing /sys/class/gpio\n");
+      fprintf(stderr, "\nProblem opening %s\n", filename);
         exit(1);
     }
-    fprintf(stderr,"%s %s",filename, s);
     fprintf(fgpio,"%s",s);
     fclose(fgpio);
 }
@@ -414,7 +421,7 @@ int main(int argc, char *argv[]) {
     *txtMsg = 0;
     sfRecFileFromRadio = NULL;
     sfRecFileDecAudio = NULL;
-    *waveFileWritePath = 0;
+    strcpy(waveFileWritePath, ".");
     *rpigpio = 0;
 
     if (Pa_Initialize()) {
@@ -464,8 +471,9 @@ int main(int argc, char *argv[]) {
                 strcpy(rpigpio, optarg);
                 sys_gpio("/sys/class/gpio/unexport", rpigpio);
                 sys_gpio("/sys/class/gpio/export", rpigpio);
+                usleep(100*1000); /* short delay so OS can create the next device */
                 char tmp[MAX_CHAR];
-                sprintf(tmp,"/sys/class/gpio/gpio%s/direction", rpigpio);
+                sprintf(tmp,"/sys/class/gpio/gpio11/direction");
                 sys_gpio(tmp, "out");
                 sprintf(rpigpio_path,"/sys/class/gpio/gpio%s/value", rpigpio);
                 sys_gpio(rpigpio_path, "0");
@@ -595,7 +603,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Comm Port for PTT: %s\n", commport);
     }
     if (*rpigpio) {
-        fprintf(stderr, "Raspberry Pi GPIO for PTT: %s\n", rpigpio);
+        fprintf(stderr, "Raspberry Pi BCM GPIO for PTT: %s\n", rpigpio);
     }
 
     signal(SIGINT, intHandler);  /* ctrl-C to exit gracefully */
@@ -660,7 +668,8 @@ int main(int argc, char *argv[]) {
 
             nin = freedv_nin(f);
             while (fifo_read(fifo, demod_in, nin) == 0) {
-                int nout = freedv_rx(f, speech_out, demod_in);
+	        int nout = 0;
+                nout = freedv_rx(f, speech_out, demod_in);
                 freedv_get_modem_stats(f, &sync, &snr_est);
 
                 if (sfRecFileFromRadio)
@@ -846,6 +855,7 @@ int main(int argc, char *argv[]) {
     }
     if (*rpigpio) {
         sys_gpio(rpigpio_path, "0");
+        sys_gpio("/sys/class/gpio/unexport", rpigpio);
     }
  
     /* Shut down port audio */
