@@ -41,7 +41,7 @@ else()
     set(FREEBEACON_VERSION_STRING "${FREEBEACON_VERSION}")
 endif()
 message(STATUS "freebeacon version: ${FREEBEACON_VERSION_STRING}")
-#configure_file(cmake/version.h.in version.h @ONLY)
+configure_file(cmake/version.h.in version.h @ONLY)
 
 # Set default build type
 if(NOT CMAKE_BUILD_TYPE)
@@ -71,7 +71,12 @@ endif()
 
 
 # Set default build flags.
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -fPIC -pie -Wl,-z,relro -Wl,-z,now")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -pie -Wl,-z,relro -Wl,-z,now")
+
+# -fPIC is implied on MinGW...
+if(NOT WIN32)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
+endif()
 
 #
 # Setup cmake options
@@ -255,3 +260,5 @@ target_link_libraries(freebeacon ${FREEBEACON_LINK_LIBS})
 if(FREEBEACON_STATIC_DEPS)
     add_dependencies(freebeacon ${FREEBEACON_STATIC_DEPS})
 endif()
+
+install(TARGETS freebeacon RUNTIME DESTINATION bin)
