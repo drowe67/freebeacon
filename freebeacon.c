@@ -297,7 +297,7 @@ int main(int argc, char *argv[]) {
     int                 sync;
     char                commport[MAX_CHAR];
     char                callsign[MAX_CHAR];
-    FILE               *ftmp;
+    //FILE               *ftmp;
     unsigned int        sync_counter, peakCounter;
     unsigned int        tnout,mnout;
     short               peak;
@@ -776,7 +776,7 @@ int main(int argc, char *argv[]) {
     src_delete(txsrc);
     src_delete(playsrc);
     freedv_close(f);
-    fclose(ftmp);
+    //fclose(ftmp);
 
     return 0;
 }
