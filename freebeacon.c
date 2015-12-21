@@ -173,6 +173,8 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 			option_parameters = " pathToWaveFiles (path to where wave files are written)";
                 } else if (strcmp("rpigpio", long_options[i].name) == 0) {
 			option_parameters = " GPIO (BCM GPIO number on Raspberry Pi for Tx PTT)";
+                } else if (strcmp("statuspagefile", long_options[i].name) == 0) {
+			option_parameters = " statusPageFileName (where to write status web page)";
                 }
 		fprintf(stderr, "\t--%s%s\n", long_options[i].name, option_parameters);
 	}
@@ -294,6 +296,7 @@ int main(int argc, char *argv[]) {
     int                 sfFs;
     int                 fssc;                 
     int                 triggerf, txfilenamef, callsignf, sampleratef, wavefilepathf, rpigpiof;
+    int                 statuspagef;
     int                 sync;
     char                commport[MAX_CHAR];
     char                callsign[MAX_CHAR];
@@ -304,6 +307,8 @@ int main(int argc, char *argv[]) {
     unsigned int        logCounter;
     char                waveFileWritePath[MAX_CHAR];
     char                rpigpio[MAX_CHAR], rpigpio_path[MAX_CHAR];
+    char                statusPageFileName[MAX_CHAR];
+    FILE               *fstatus;
 
     /* debug raw file */
 
@@ -326,6 +331,7 @@ int main(int argc, char *argv[]) {
     sfRecFileDecAudio = NULL;
     strcpy(waveFileWritePath, ".");
     *rpigpio = 0;
+    *statusPageFileName = 0;
 
     if (Pa_Initialize()) {
         fprintf(stderr, "Port Audio failed to initialize");
@@ -342,6 +348,7 @@ int main(int argc, char *argv[]) {
         { "callsign", required_argument, &callsignf, 1 },
         { "samplerate", required_argument, &sampleratef, 1 },
         { "wavefilewritepath", required_argument, &wavefilepathf, 1 },
+        { "statuspagefile", required_argument, &statuspagef, 1 },
         { "rpigpio", required_argument, &rpigpiof, 1 },
         { "list", no_argument, NULL, 'l' },
         { "help", no_argument, NULL, 'h' },
@@ -370,6 +377,8 @@ int main(int argc, char *argv[]) {
                 fssc = atoi(optarg);
             } else if (strcmp(long_options[option_index].name, "wavefilewritepath") == 0) {
                 strcpy(waveFileWritePath, optarg);
+            } else if (strcmp(long_options[option_index].name, "statuspagefile") == 0) {
+                strcpy(statusPageFileName, optarg);
             } else if (strcmp(long_options[option_index].name, "rpigpio") == 0) {
                 strcpy(rpigpio, optarg);
                 sys_gpio("/sys/class/gpio/unexport", rpigpio);
@@ -502,6 +511,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "trigger string: %s\ntxFileName: %s\n", triggerString, txFileName);
     fprintf(stderr, "PortAudio devNum: %d\nsamplerate: %d\n", devNum, fssc);
     fprintf(stderr, "WaveFileWritePath: %s\n", waveFileWritePath);
+    fprintf(stderr, "statusPageFile: %s\n", statusPageFileName);
     if (com_handle != COM_HANDLE_INVALID) {
         fprintf(stderr, "Comm Port for PTT: %s\n", commport);
     }
@@ -740,11 +750,21 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        if (verbose) {
-            if (logCounter++ == LOG_COUNTER) {
-                logCounter = 0;
+        if (logCounter++ == LOG_COUNTER) {
+            logCounter = 0;
+            if (verbose) {
                 fprintf(stderr, "state: %-20s  peak: %6d  sync: %d  SNR: %3.1f  triggered: %d\n", 
                         state_str[state], peak, sync, snr_est, triggered);
+            }
+            if (*statusPageFileName) {
+                fstatus = fopen(statusPageFileName, "wt");
+                if (fstatus != NULL) {
+                    fprintf(fstatus, "<html>\n<head>\n<meta http-equiv=\"refresh\" content=\"2\">\n</head>\n<body>\n");
+                    fprintf(fstatus, "state: %s peak: %d sync: %d SNR: %3.1f triggered: %d\n", 
+                            state_str[state], peak, sync, snr_est, triggered);
+                    fprintf(fstatus, "</body>\n</html>\n");
+                }
+                fclose(fstatus);
             }
         }
 
