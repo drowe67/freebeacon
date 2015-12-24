@@ -30,11 +30,10 @@
 #define MAX_CHAR            80
 #define FS8                 8000                // codec audio sample rate fixed at 8 kHz
 #define FS48                48000               // 48 kHz sampling rate rec. as we can trust accuracy of sound card
-#define SYNC_FRAMES         50                  // frames of valid rx sync we need to see to change state
-#define UNSYNC_FRAMES       25                  // frames of lost sync we need to see to change state
-#define PEAK_COUNTER        10                  // how often to report peak input level 
-#define COM_HANDLE_INVALID  -1
-#define LOG_COUNTER         50
+#define SYNC_TIMER          2.0                 // seconds of valid rx sync we need to see to change state
+#define UNSYNC_TIMER        2.0                 // seconds of lost sync we need to see to change state
+#define COM_HANDLE_INVALID   -1
+#define LOG_TIMER           1.0         
 
 /* globals used to communicate with async events and callback functions */
 
@@ -96,7 +95,6 @@ int resample(SRC_STATE *src,
     SRC_DATA src_data;
     float    input[length_input_short];
     float    output[length_output_short];
-    int      ret;
 
     assert(src != NULL);
 
@@ -110,8 +108,7 @@ int resample(SRC_STATE *src,
     src_data.src_ratio = (float)output_sample_rate/input_sample_rate;
     //printf("%d %d src_ratio: %f \n", length_input_short, length_output_short, src_data.src_ratio);
 
-    ret = src_process(src, &src_data);
-    assert(ret == 0);
+    src_process(src, &src_data);
 
     assert(src_data.output_frames_gen <= length_output_short);
     src_float_to_short_array(output, output_short, src_data.output_frames_gen);
@@ -173,6 +170,8 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 			option_parameters = " pathToWaveFiles (path to where wave files are written)";
                 } else if (strcmp("rpigpio", long_options[i].name) == 0) {
 			option_parameters = " GPIO (BCM GPIO number on Raspberry Pi for Tx PTT)";
+                } else if (strcmp("rpigpioalive", long_options[i].name) == 0) {
+			option_parameters = " GPIO (BCM GPIO number on Raspberry Pi for alive blinker)";
                 } else if (strcmp("statuspagefile", long_options[i].name) == 0) {
 			option_parameters = " statusPageFileName (where to write status web page)";
                 }
@@ -273,6 +272,22 @@ void sys_gpio(char filename[], char s[]) {
 }
 
 
+void getTimeStr(char timeStr[]) {
+    time_t ltime;     /* calendar time */
+    ltime=time(NULL); /* get current cal time */
+
+    sprintf(timeStr, "%s",asctime( localtime(&ltime) ) );
+    int i=0;
+    while (timeStr[i]) {
+        if (isspace(timeStr[i]) || (timeStr[i] == ':')) 
+            timeStr[i]='_';
+        else
+            timeStr[i] = tolower(timeStr[i]);
+        i++;
+    }
+}
+
+
 /*--------------------------------------------------------------------------------------------------------*\
 
                                                   MAIN
@@ -295,20 +310,20 @@ int main(int argc, char *argv[]) {
     SNDFILE            *sfPlayFile, *sfRecFileFromRadio, *sfRecFileDecAudio;
     int                 sfFs;
     int                 fssc;                 
-    int                 triggerf, txfilenamef, callsignf, sampleratef, wavefilepathf, rpigpiof;
+    int                 triggerf, txfilenamef, callsignf, sampleratef, wavefilepathf, rpigpiof, rpigpioalivef;
     int                 statuspagef;
     int                 sync;
     char                commport[MAX_CHAR];
     char                callsign[MAX_CHAR];
     //FILE               *ftmp;
-    unsigned int        sync_counter, peakCounter;
-    unsigned int        tnout,mnout;
-    short               peak;
-    unsigned int        logCounter;
+    float               syncTimer, logTimer;
+    unsigned int        tnout=0,mnout;
+    short               peak = 0;
     char                waveFileWritePath[MAX_CHAR];
-    char                rpigpio[MAX_CHAR], rpigpio_path[MAX_CHAR];
+    char                rpigpio[MAX_CHAR], rpigpio_path[MAX_CHAR], rpigpioalive[MAX_CHAR], rpigpioalive_path[MAX_CHAR];
     char                statusPageFileName[MAX_CHAR];
     FILE               *fstatus;
+    int                 gpioAliveState = 0;
 
     /* debug raw file */
 
@@ -329,8 +344,10 @@ int main(int argc, char *argv[]) {
     *txtMsg = 0;
     sfRecFileFromRadio = NULL;
     sfRecFileDecAudio = NULL;
+    sfPlayFile = NULL;
     strcpy(waveFileWritePath, ".");
     *rpigpio = 0;
+    *rpigpioalive = 0;
     *statusPageFileName = 0;
 
     if (Pa_Initialize()) {
@@ -350,6 +367,7 @@ int main(int argc, char *argv[]) {
         { "wavefilewritepath", required_argument, &wavefilepathf, 1 },
         { "statuspagefile", required_argument, &statuspagef, 1 },
         { "rpigpio", required_argument, &rpigpiof, 1 },
+        { "rpigpioalive", required_argument, &rpigpioalivef, 1 },
         { "list", no_argument, NULL, 'l' },
         { "help", no_argument, NULL, 'h' },
         { NULL, no_argument, NULL, 0 }
@@ -389,6 +407,16 @@ int main(int argc, char *argv[]) {
                 sys_gpio(tmp, "out");
                 sprintf(rpigpio_path,"/sys/class/gpio/gpio%s/value", rpigpio);
                 sys_gpio(rpigpio_path, "0");
+            } else if (strcmp(long_options[option_index].name, "rpigpioalive") == 0) {
+                strcpy(rpigpioalive, optarg);
+                sys_gpio("/sys/class/gpio/unexport", rpigpioalive);
+                sys_gpio("/sys/class/gpio/export", rpigpioalive);
+                usleep(100*1000); /* short delay so OS can create the next device */
+                char tmp[MAX_CHAR];
+                sprintf(tmp,"/sys/class/gpio/gpio11/direction");
+                sys_gpio(tmp, "out");
+                sprintf(rpigpioalive_path,"/sys/class/gpio/gpio%s/value", rpigpio);
+                sys_gpio(rpigpioalive_path, "0");       
             }
             break;
 
@@ -430,7 +458,8 @@ int main(int argc, char *argv[]) {
     int   fsm   = freedv_get_modem_sample_rate(f);     /* modem sample rate                                   */
     int   n8m   = freedv_get_n_nom_modem_samples(f);   /* nominal modem sample buffer size at fsm sample rate */
     int   n48   = n8m*fssc/fsm;                        /* nominal modem sample buffer size at 48kHz           */
-    
+    float dT    = (float)n48/fssc;                     /* period of each sound buffer                         */
+
     if (verbose)
         fprintf(stderr, "fsm: %d n8m: %d n48: %d\n", fsm, n8m, n48);
 
@@ -518,13 +547,16 @@ int main(int argc, char *argv[]) {
     if (*rpigpio) {
         fprintf(stderr, "Raspberry Pi BCM GPIO for PTT: %s\n", rpigpio);
     }
+    if (*rpigpioalive) {
+        fprintf(stderr, "Raspberry Pi BCM GPIO for Alive Indicator: %s\n", rpigpioalive);
+    }
 
     signal(SIGINT, intHandler);  /* ctrl-C to exit gracefully */
     keepRunning = 1;
     ptxtMsg = txtMsg;
     triggered = 0;
-    peakCounter = 0;
-    logCounter = 0;
+    logTimer = 0;
+    syncTimer = 0;
     if (com_handle != COM_HANDLE_INVALID) {
         lowerRTS(); lowerDTR();
     }
@@ -540,6 +572,7 @@ int main(int argc, char *argv[]) {
         }
         sfPlayFile = openPlayFile(txFileName, &sfFs);
     }
+
 
     /* Main loop -------------------------------------------------------------------------------------*/
 
@@ -564,16 +597,11 @@ int main(int argc, char *argv[]) {
             //fwrite(rx48k, sizeof(short), n8m, ftmp);
             int n8m_out = resample(rxsrc, rxfsm, rx48k, fsm, fssc, n8m, n48);
           
-            if (verbose) {
-                /* crude input signal level meter */
-                peak = 0;
-                for (j=0; j<n8m_out; j++)
-                    if (rxfsm[j] > peak)
-                        peak = rxfsm[j];
-                if (peakCounter++ == PEAK_COUNTER) {
-                    peakCounter = 0;
-                }
-            }
+            /* crude input signal level meter */
+            peak = 0;
+            for (j=0; j<n8m_out; j++)
+                if (rxfsm[j] > peak)
+                    peak = rxfsm[j];
 
             fifo_write(fifo, rxfsm, n8m_out);
 
@@ -646,7 +674,7 @@ int main(int argc, char *argv[]) {
         case SRX_IDLE:
             if (sync) {
                 next_state = SRX_MAYBE_SYNC;
-                sync_counter = 0;
+                syncTimer = 0.0;
                 *txtMsg = 0;
                 ptxtMsg = txtMsg;
                 triggered = 0;
@@ -656,25 +684,16 @@ int main(int argc, char *argv[]) {
             break;
         case SRX_MAYBE_SYNC:
             if (sync) {
-                sync_counter++;
-                if (sync_counter == SYNC_FRAMES) {
+                syncTimer += dT;
+                if (syncTimer >= SYNC_TIMER) {
                     /* OK we really are in sync */
 
                     /* kick off recording of two files */
 
-                    time_t ltime;     /* calendar time */
-                    ltime=time(NULL); /* get current cal time */
                     char timeStr[MAX_CHAR];
-                    sprintf(timeStr, "%s",asctime( localtime(&ltime) ) );
-                    int i=0;
-                    while (timeStr[i]) {
-                        if (isspace(timeStr[i]) || (timeStr[i] == ':')) 
-                            timeStr[i]='_';
-                        else
-                            timeStr[i] = tolower(timeStr[i]);
-                        i++;
-                    }
                     char recFileFromRadioName[MAX_CHAR], recFileDecAudioName[MAX_CHAR];
+
+                    getTimeStr(timeStr);
                     sprintf(recFileFromRadioName,"%s/%s_from_radio.wav", waveFileWritePath, timeStr);
                     sprintf(recFileDecAudioName,"%s/%s_decoded_speech.wav", waveFileWritePath, timeStr);
                     sfRecFileFromRadio = openRecFile(recFileFromRadioName, fsm);
@@ -688,16 +707,16 @@ int main(int argc, char *argv[]) {
                 next_state = SRX_IDLE;
             break;
         case SRX_SYNC:
-            sync_counter++;
+            syncTimer += dT;
             if (!sync) {
-                sync_counter = 0;
+                syncTimer = 0;
                 next_state = SRX_MAYBE_UNSYNC;
             }
             break;
         case SRX_MAYBE_UNSYNC:
             if (!sync) {
-                sync_counter++;
-                if (sync_counter == UNSYNC_FRAMES) {
+                syncTimer += dT;
+                if (syncTimer >= UNSYNC_TIMER) {
                     /* we really are out of sync */
 
                     /* finish up any open recording files */
@@ -750,35 +769,62 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        if (logCounter++ == LOG_COUNTER) {
-            logCounter = 0;
+        logTimer += dT;
+        if (logTimer >= LOG_TIMER) {
+            logTimer = 0;
             if (verbose) {
                 fprintf(stderr, "state: %-20s  peak: %6d  sync: %d  SNR: %3.1f  triggered: %d\n", 
                         state_str[state], peak, sync, snr_est, triggered);
             }
             if (*statusPageFileName) {
+                char timeStr[MAX_CHAR];
+                time_t ltime;     /* calendar time */
+                ltime=time(NULL); /* get current cal time */
+
+                sprintf(timeStr, "%s",asctime( localtime(&ltime) ) );
+                strtok(timeStr, "\n");
+
                 fstatus = fopen(statusPageFileName, "wt");
                 if (fstatus != NULL) {
                     fprintf(fstatus, "<html>\n<head>\n<meta http-equiv=\"refresh\" content=\"2\">\n</head>\n<body>\n");
-                    fprintf(fstatus, "state: %s peak: %d sync: %d SNR: %3.1f triggered: %d\n", 
-                            state_str[state], peak, sync, snr_est, triggered);
+                    fprintf(fstatus, "%s: state: %s peak: %d sync: %d SNR: %3.1f triggered: %d\n", 
+                            timeStr, state_str[state], peak, sync, snr_est, triggered);
                     fprintf(fstatus, "</body>\n</html>\n");
+                    fclose(fstatus);
                 }
-                fclose(fstatus);
+            }
+
+            /* toggle alive GPIO */
+
+            if (*rpigpioalive) {
+                if (gpioAliveState) {
+                    gpioAliveState = 0;
+                    sys_gpio(rpigpioalive_path, "0");           
+                } else {
+                    gpioAliveState = 1;
+                    sys_gpio(rpigpioalive_path, "1");           
+                }
             }
         }
 
         state = next_state;
     }
 
-    /* lower PTT lines */
+
+    /* lower PTT lines, shut down ports */
 
     if (com_handle != COM_HANDLE_INVALID) {
         lowerRTS(); lowerDTR();
+        closeComPort();
     }
     if (*rpigpio) {
         sys_gpio(rpigpio_path, "0");
         sys_gpio("/sys/class/gpio/unexport", rpigpio);
+    }
+   
+    if (*rpigpioalive) {
+        sys_gpio(rpigpioalive_path, "0");
+        sys_gpio("/sys/class/gpio/unexport", rpigpioalive);
     }
  
     /* Shut down port audio */
