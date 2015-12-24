@@ -144,7 +144,7 @@ void listAudioDevices(void) {
 void printHelp(const struct option* long_options, int num_opts, char* argv[])
 {
 	int i;
-	char *option_parameters;
+	char *option_parameters = NULL;
 
 	fprintf(stderr, "\nFreeBeacon - FreeDV Beacon\n"
 		"usage: %s [OPTIONS]\n\n"
@@ -262,7 +262,7 @@ SNDFILE *openRecFile(char fileName[], int sfFs)
 
 void sys_gpio(char filename[], char s[]) {
     FILE *fgpio = fopen(filename, "wt");
-    fprintf(stderr,"%s %s\n",filename, s);
+    //fprintf(stderr,"%s %s\n",filename, s);
     if (fgpio == NULL) {
       fprintf(stderr, "\nProblem opening %s\n", filename);
         exit(1);
@@ -274,17 +274,11 @@ void sys_gpio(char filename[], char s[]) {
 
 void getTimeStr(char timeStr[]) {
     time_t ltime;     /* calendar time */
-    ltime=time(NULL); /* get current cal time */
+    struct tm *loctime;
 
-    sprintf(timeStr, "%s",asctime( localtime(&ltime) ) );
-    int i=0;
-    while (timeStr[i]) {
-        if (isspace(timeStr[i]) || (timeStr[i] == ':')) 
-            timeStr[i]='_';
-        else
-            timeStr[i] = tolower(timeStr[i]);
-        i++;
-    }
+    ltime=time(NULL); /* get current cal time */
+    loctime = localtime (&ltime);
+    strftime(timeStr, MAX_CHAR, "%F-%R:%S",loctime);
 }
 
 
@@ -403,7 +397,7 @@ int main(int argc, char *argv[]) {
                 sys_gpio("/sys/class/gpio/export", rpigpio);
                 usleep(100*1000); /* short delay so OS can create the next device */
                 char tmp[MAX_CHAR];
-                sprintf(tmp,"/sys/class/gpio/gpio%d/direction", rpigpio);
+                sprintf(tmp,"/sys/class/gpio/gpio%s/direction", rpigpio);
                 sys_gpio(tmp, "out");
                 sprintf(rpigpio_path,"/sys/class/gpio/gpio%s/value", rpigpio);
                 sys_gpio(rpigpio_path, "0");
@@ -413,7 +407,7 @@ int main(int argc, char *argv[]) {
                 sys_gpio("/sys/class/gpio/export", rpigpioalive);
                 usleep(100*1000); /* short delay so OS can create the next device */
                 char tmp[MAX_CHAR];
-                sprintf(tmp,"/sys/class/gpio/gpio%d/direction", rpigpioalive);
+                sprintf(tmp,"/sys/class/gpio/gpio%s/direction", rpigpioalive);
                 sys_gpio(tmp, "out");
                 sprintf(rpigpioalive_path,"/sys/class/gpio/gpio%s/value", rpigpioalive);
                 sys_gpio(rpigpioalive_path, "0");       
