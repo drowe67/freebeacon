@@ -403,7 +403,7 @@ int main(int argc, char *argv[]) {
                 sys_gpio("/sys/class/gpio/export", rpigpio);
                 usleep(100*1000); /* short delay so OS can create the next device */
                 char tmp[MAX_CHAR];
-                sprintf(tmp,"/sys/class/gpio/gpio11/direction");
+                sprintf(tmp,"/sys/class/gpio/gpio%d/direction", rpigpio);
                 sys_gpio(tmp, "out");
                 sprintf(rpigpio_path,"/sys/class/gpio/gpio%s/value", rpigpio);
                 sys_gpio(rpigpio_path, "0");
@@ -413,9 +413,9 @@ int main(int argc, char *argv[]) {
                 sys_gpio("/sys/class/gpio/export", rpigpioalive);
                 usleep(100*1000); /* short delay so OS can create the next device */
                 char tmp[MAX_CHAR];
-                sprintf(tmp,"/sys/class/gpio/gpio11/direction");
+                sprintf(tmp,"/sys/class/gpio/gpio%d/direction", rpigpioalive);
                 sys_gpio(tmp, "out");
-                sprintf(rpigpioalive_path,"/sys/class/gpio/gpio%s/value", rpigpio);
+                sprintf(rpigpioalive_path,"/sys/class/gpio/gpio%s/value", rpigpioalive);
                 sys_gpio(rpigpioalive_path, "0");       
             }
             break;
