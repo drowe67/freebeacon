@@ -11,11 +11,16 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <fcntl.h>
-#include <termios.h>
 #include <unistd.h>
-#include <sys/ioctl.h>
 #include <time.h>
 #include <ctype.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <termios.h>
+#include <sys/ioctl.h>
+#endif
 
 #include <samplerate.h>
 #include <getopt.h>
@@ -781,8 +786,8 @@ int main(int argc, char *argv[]) {
                 fstatus = fopen(statusPageFileName, "wt");
                 if (fstatus != NULL) {
                     fprintf(fstatus, "<html>\n<head>\n<meta http-equiv=\"refresh\" content=\"2\">\n</head>\n<body>\n");
-                    fprintf(fstatus, "%s: state: %s peak: %d sync: %d SNR: %3.1f triggered: %d\n", 
-                            timeStr, state_str[state], peak, sync, snr_est, triggered);
+                    fprintf(fstatus, "%s: state: %s peak: %d sync: %d SNR: %3.1f triggered: %d txtMsg: %s\n", 
+                            timeStr, state_str[state], peak, sync, snr_est, triggered, txtMsg);
                     fprintf(fstatus, "</body>\n</html>\n");
                     fclose(fstatus);
                 }
@@ -858,6 +863,61 @@ int openComPort(const char *name)
     if(com_handle != COM_HANDLE_INVALID)
         closeComPort();
 
+#ifdef _WIN32
+	{
+		COMMCONFIG CC;
+		DWORD CCsize=sizeof(CC);
+		COMMTIMEOUTS timeouts;
+		DCB	dcb;
+
+		if(GetDefaultCommConfigA(name, &CC, &CCsize)) {
+			CC.dcb.fOutxCtsFlow		= FALSE;
+			CC.dcb.fOutxDsrFlow		= FALSE;
+			CC.dcb.fDtrControl		= DTR_CONTROL_DISABLE;
+			CC.dcb.fDsrSensitivity	= FALSE;
+			CC.dcb.fRtsControl		= RTS_CONTROL_DISABLE;
+			SetDefaultCommConfigA(name, &CC, CCsize);
+		}
+
+		if((com_handle=CreateFileA(name
+			,GENERIC_READ|GENERIC_WRITE 	/* Access */
+			,0								/* Share mode */
+			,NULL							/* Security attributes */
+			,OPEN_EXISTING					/* Create access */
+			,FILE_ATTRIBUTE_NORMAL			/* File attributes */
+			,NULL							/* Template */
+			))==INVALID_HANDLE_VALUE)
+			return false;
+
+		if(GetCommTimeouts(com_handle, &timeouts)) {
+			timeouts.ReadIntervalTimeout=MAXDWORD;
+			timeouts.ReadTotalTimeoutMultiplier=0;
+			timeouts.ReadTotalTimeoutConstant=0;		// No-wait read timeout
+			timeouts.WriteTotalTimeoutMultiplier=0;
+			timeouts.WriteTotalTimeoutConstant=5000;	// 5 seconds
+			SetCommTimeouts(com_handle,&timeouts);
+		}
+
+		/* Force N-8-1 mode: */
+		if(GetCommState(com_handle, &dcb)==TRUE) {
+			dcb.ByteSize		= 8;
+			dcb.Parity			= NOPARITY;
+			dcb.StopBits		= ONESTOPBIT;
+			dcb.DCBlength		= sizeof(DCB);
+			dcb.fBinary			= TRUE;
+			dcb.fOutxCtsFlow	= FALSE;
+			dcb.fOutxDsrFlow	= FALSE;
+			dcb.fDtrControl		= DTR_CONTROL_DISABLE;
+			dcb.fDsrSensitivity	= FALSE;
+			dcb.fTXContinueOnXoff= TRUE;
+			dcb.fOutX			= FALSE;
+			dcb.fInX			= FALSE;
+			dcb.fRtsControl		= RTS_CONTROL_DISABLE;
+			dcb.fAbortOnError	= FALSE;
+			SetCommState(com_handle, &dcb);
+		}
+	}
+#else
     {
         struct termios t;
 
@@ -896,13 +956,18 @@ int openComPort(const char *name)
         }
 		
     }
+#endif
 
     return 0;
 }
 
 void closeComPort(void)
 {
+#ifdef _WIN32
+	CloseHandle(com_handle);
+#else
     close(com_handle);
+#endif
     com_handle = COM_HANDLE_INVALID;
 }
 
@@ -916,10 +981,14 @@ void raiseDTR(void)
 {
     if(com_handle == COM_HANDLE_INVALID)
         return;
+#ifdef _WIN32
+	EscapeCommFunction(com_handle, SETDTR);
+#else
     {	// For C89 happiness
         int flags = TIOCM_DTR;
         ioctl(com_handle, TIOCMBIS, &flags);
     }
+#endif
 }
 
 
@@ -927,29 +996,42 @@ void raiseRTS(void)
 {
     if(com_handle == COM_HANDLE_INVALID)
         return;
+#ifdef _WIN32
+	EscapeCommFunction(com_handle, SETRTS);
+#else
     {	// For C89 happiness
         int flags = TIOCM_RTS;
         ioctl(com_handle, TIOCMBIS, &flags);
     }
+#endif
 }
 
 void lowerDTR(void)
 {
     if(com_handle == COM_HANDLE_INVALID)
         return;
+
+#ifdef _WIN32
+	EscapeCommFunction(com_handle, CLRDTR);
+#else
     {	// For C89 happiness
         int flags = TIOCM_DTR;
         ioctl(com_handle, TIOCMBIC, &flags);
     }
+#endif
 }
 
 void lowerRTS(void)
 {
     if(com_handle == COM_HANDLE_INVALID)
         return;
+#ifdef _WIN32
+	EscapeCommFunction(com_handle, CLRRTS);
+#else
     {	// For C89 happiness
         int flags = TIOCM_RTS;
         ioctl(com_handle, TIOCMBIC, &flags);
     }
+#endif
 }
 
