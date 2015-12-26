@@ -670,6 +670,7 @@ int main(int argc, char *argv[]) {
         next_state = state;
 
         switch(state) {
+
         case SRX_IDLE:
             if (sync) {
                 next_state = SRX_MAYBE_SYNC;
@@ -681,23 +682,13 @@ int main(int argc, char *argv[]) {
                 freedv_set_total_bits(f, 0);
             }
             break;
+
         case SRX_MAYBE_SYNC:
             if (sync) {
                 syncTimer += dT;
                 if (syncTimer >= SYNC_TIMER) {
+
                     /* OK we really are in sync */
-
-                    /* kick off recording of two files */
-
-                    char timeStr[MAX_CHAR];
-                    char recFileFromRadioName[MAX_CHAR], recFileDecAudioName[MAX_CHAR];
-
-                    getTimeStr(timeStr);
-                    sprintf(recFileFromRadioName,"%s/%s_from_radio.wav", waveFileWritePath, timeStr);
-                    sprintf(recFileDecAudioName,"%s/%s_decoded_speech.wav", waveFileWritePath, timeStr);
-                    sfRecFileFromRadio = openRecFile(recFileFromRadioName, fsm);
-                    sfRecFileDecAudio = openRecFile(recFileDecAudioName, FS8);
-                    tnout = 0;
 
                     next_state = SRX_SYNC;
                 }
@@ -705,13 +696,31 @@ int main(int argc, char *argv[]) {
             else
                 next_state = SRX_IDLE;
             break;
+
         case SRX_SYNC:
             syncTimer += dT;
             if (!sync) {
                 syncTimer = 0;
                 next_state = SRX_MAYBE_UNSYNC;
             }
+
+            /* if triggered kick off recording of two files */
+
+            if (triggered) {
+
+                char timeStr[MAX_CHAR];
+                char recFileFromRadioName[MAX_CHAR], recFileDecAudioName[MAX_CHAR];
+
+                getTimeStr(timeStr);
+                sprintf(recFileFromRadioName,"%s/%s_from_radio.wav", waveFileWritePath, timeStr);
+                sprintf(recFileDecAudioName,"%s/%s_decoded_speech.wav", waveFileWritePath, timeStr);
+                sfRecFileFromRadio = openRecFile(recFileFromRadioName, fsm);
+                sfRecFileDecAudio = openRecFile(recFileDecAudioName, FS8);
+                tnout = 0;
+            }
+
             break;
+
         case SRX_MAYBE_UNSYNC:
             if (!sync) {
                 syncTimer += dT;
@@ -754,6 +763,7 @@ int main(int argc, char *argv[]) {
             else
                 next_state = SRX_SYNC; /* sync is back so false alarm */
             break;
+
         case STX:
             if (sfPlayFile == NULL) {
 
@@ -767,6 +777,8 @@ int main(int argc, char *argv[]) {
             }
             break;
         }
+
+        /* end switch statement for case statement */
 
         logTimer += dT;
         if (logTimer >= LOG_TIMER) {
@@ -807,8 +819,10 @@ int main(int argc, char *argv[]) {
         }
 
         state = next_state;
-    }
+    } /* end while loop */
 
+
+    /* Ctrl-C has been pressed lets shut down gracefully ------------------*/
 
     /* lower PTT lines, shut down ports */
 
@@ -835,6 +849,8 @@ int main(int argc, char *argv[]) {
     }
     Pa_CloseStream(stream);
     Pa_Terminate();
+
+    /* clean up states */
 
     fifo_destroy(fifo);
     src_delete(rxsrc);
