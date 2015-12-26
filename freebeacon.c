@@ -53,13 +53,15 @@ int com_handle, verbose;
 #define SRX_IDLE          0      /* listening but no FreeDV signal                                   */
 #define SRX_MAYBE_SYNC    1      /* We have sync but lets see if it goes away                        */
 #define SRX_SYNC          2      /* We have sync on a valid FreeDV signal                            */
-#define SRX_MAYBE_UNSYNC  3      /* We have lost sync but lets see if it's really gone               */
-#define STX               4      /* transmitting reply                                               */
+#define SRX_REC_WAVE      3      /* Trigged and recording wave files                                 */
+#define SRX_MAYBE_UNSYNC  4      /* We have lost sync but lets see if it's really gone               */
+#define STX               5      /* transmitting reply                                               */
 
 char *state_str[] = {
     "Rx Idle",
     "Rx Maybe Sync",
     "Rx Sync",
+    "Rx Rec Wave",
     "Rx Maybe UnSync",
     "Tx"
 };
@@ -717,6 +719,16 @@ int main(int argc, char *argv[]) {
                 sfRecFileFromRadio = openRecFile(recFileFromRadioName, fsm);
                 sfRecFileDecAudio = openRecFile(recFileDecAudioName, FS8);
                 tnout = 0;
+                next_state = SRX_REC_WAVE;
+            }
+
+            break;
+
+        case SRX_REC_WAVE:
+            syncTimer += dT;
+            if (!sync) {
+                syncTimer = 0;
+                next_state = SRX_MAYBE_UNSYNC;
             }
 
             break;
