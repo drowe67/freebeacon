@@ -53,15 +53,13 @@ int com_handle, verbose;
 #define SRX_IDLE          0      /* listening but no FreeDV signal                                   */
 #define SRX_MAYBE_SYNC    1      /* We have sync but lets see if it goes away                        */
 #define SRX_SYNC          2      /* We have sync on a valid FreeDV signal                            */
-#define SRX_REC_WAVE      3      /* Trigged and recording wave files                                 */
-#define SRX_MAYBE_UNSYNC  4      /* We have lost sync but lets see if it's really gone               */
-#define STX               5      /* transmitting reply                                               */
+#define SRX_MAYBE_UNSYNC  3      /* We have lost sync but lets see if it's really gone               */
+#define STX               4      /* transmitting reply                                               */
 
 char *state_str[] = {
     "Rx Idle",
     "Rx Maybe Sync",
     "Rx Sync",
-    "Rx Rec Wave",
     "Rx Maybe UnSync",
     "Tx"
 };
@@ -313,7 +311,7 @@ int main(int argc, char *argv[]) {
     int                 fssc;                 
     int                 triggerf, txfilenamef, callsignf, sampleratef, wavefilepathf, rpigpiof, rpigpioalivef;
     int                 statuspagef;
-    int                 sync;
+    int                 sync, haveRecording;
     char                commport[MAX_CHAR];
     char                callsign[MAX_CHAR];
     //FILE               *ftmp;
@@ -325,7 +323,7 @@ int main(int argc, char *argv[]) {
     char                statusPageFileName[MAX_CHAR];
     FILE               *fstatus;
     int                 gpioAliveState = 0;
-
+    
     /* debug raw file */
 
     //ftmp = fopen("t.raw", "wb");
@@ -558,6 +556,8 @@ int main(int argc, char *argv[]) {
     triggered = 0;
     logTimer = 0;
     syncTimer = 0;
+    haveRecording = 0;
+
     if (com_handle != COM_HANDLE_INVALID) {
         lowerRTS(); lowerDTR();
     }
@@ -679,7 +679,6 @@ int main(int argc, char *argv[]) {
                 syncTimer = 0.0;
                 *txtMsg = 0;
                 ptxtMsg = txtMsg;
-                triggered = 0;
                 freedv_set_total_bit_errors(f, 0);
                 freedv_set_total_bits(f, 0);
             }
@@ -695,8 +694,11 @@ int main(int argc, char *argv[]) {
                     next_state = SRX_SYNC;
                 }
             }
-            else
+            else {
                 next_state = SRX_IDLE;
+                triggered = 0;
+                haveRecording = 0;
+            }
             break;
 
         case SRX_SYNC:
@@ -708,7 +710,7 @@ int main(int argc, char *argv[]) {
 
             /* if triggered kick off recording of two files */
 
-            if (triggered) {
+            if (triggered && !haveRecording) {
 
                 char timeStr[MAX_CHAR];
                 char recFileFromRadioName[MAX_CHAR], recFileDecAudioName[MAX_CHAR];
@@ -718,17 +720,8 @@ int main(int argc, char *argv[]) {
                 sprintf(recFileDecAudioName,"%s/%s_decoded_speech.wav", waveFileWritePath, timeStr);
                 sfRecFileFromRadio = openRecFile(recFileFromRadioName, fsm);
                 sfRecFileDecAudio = openRecFile(recFileDecAudioName, FS8);
+                haveRecording = 1;
                 tnout = 0;
-                next_state = SRX_REC_WAVE;
-            }
-
-            break;
-
-        case SRX_REC_WAVE:
-            syncTimer += dT;
-            if (!sync) {
-                syncTimer = 0;
-                next_state = SRX_MAYBE_UNSYNC;
             }
 
             break;
@@ -769,6 +762,8 @@ int main(int argc, char *argv[]) {
                     }
                     else {
                         next_state = SRX_IDLE;
+                        triggered = 0;
+                        haveRecording = 0;
                     }
                 }
             }
@@ -786,6 +781,8 @@ int main(int argc, char *argv[]) {
                     sys_gpio(rpigpio_path, "0");
                 }
                 next_state = SRX_IDLE;
+                triggered = 0;
+                haveRecording = 0;
             }
             break;
         }
