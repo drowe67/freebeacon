@@ -3,7 +3,7 @@
   David Rowe 
   Created Dec 2015
 
-  FreeDV Beacon.
+  FreeDV Beacon. 
 */
 
 #include <assert.h>
@@ -14,6 +14,10 @@
 #include <unistd.h>
 #include <time.h>
 #include <ctype.h>
+#include <netdb.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <pthread.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -42,7 +46,7 @@
 
 /* globals used to communicate with async events and callback functions */
 
-volatile int keepRunning;
+volatile int keepRunning, runListener, recordAny;
 char txtMsg[MAX_CHAR], *ptxtMsg, triggerString[MAX_CHAR];
 int triggered;
 float snr_est, snr_sample;
@@ -71,6 +75,7 @@ void raiseDTR(void);
 void lowerDTR(void);
 void raiseRTS(void);
 void lowerRTS(void);
+pthread_t start_udp_listener_thread(void);
 
 
 /*--------------------------------------------------------------------------------------------------------*\
@@ -532,6 +537,9 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
 
+    /* Start UDP listener thread */
+
+    start_udp_listener_thread();
 
     /* Init for main loop ----------------------------------------------------------------------------*/
 
@@ -552,6 +560,7 @@ int main(int argc, char *argv[]) {
 
     signal(SIGINT, intHandler);  /* ctrl-C to exit gracefully */
     keepRunning = 1;
+    recordAny = 0;
     ptxtMsg = txtMsg;
     triggered = 0;
     logTimer = 0;
@@ -710,7 +719,7 @@ int main(int argc, char *argv[]) {
 
             /* if triggered kick off recording of two files */
 
-            if (triggered && !haveRecording) {
+            if ((triggered || recordAny) && !haveRecording) {
 
                 char timeStr[MAX_CHAR];
                 char recFileFromRadioName[MAX_CHAR], recFileDecAudioName[MAX_CHAR];
@@ -721,6 +730,7 @@ int main(int argc, char *argv[]) {
                 sfRecFileFromRadio = openRecFile(recFileFromRadioName, fsm);
                 sfRecFileDecAudio = openRecFile(recFileDecAudioName, FS8);
                 haveRecording = 1;
+                recordAny = 0;
                 tnout = 0;
             }
 
@@ -793,8 +803,8 @@ int main(int argc, char *argv[]) {
         if (logTimer >= LOG_TIMER) {
             logTimer = 0;
             if (verbose) {
-                fprintf(stderr, "state: %-20s  peak: %6d  sync: %d  SNR: %3.1f  triggered: %d\n", 
-                        state_str[state], peak, sync, snr_est, triggered);
+                fprintf(stderr, "state: %-20s  peak: %6d  sync: %d  SNR: %3.1f  triggered: %d recordany: %d\n", 
+                        state_str[state], peak, sync, snr_est, triggered, recordAny);
             }
             if (*statusPageFileName) {
                 char timeStr[MAX_CHAR];
@@ -807,8 +817,8 @@ int main(int argc, char *argv[]) {
                 fstatus = fopen(statusPageFileName, "wt");
                 if (fstatus != NULL) {
                     fprintf(fstatus, "<html>\n<head>\n<meta http-equiv=\"refresh\" content=\"2\">\n</head>\n<body>\n");
-                    fprintf(fstatus, "%s: state: %s peak: %d sync: %d SNR: %3.1f triggered: %d txtMsg: %s\n", 
-                            timeStr, state_str[state], peak, sync, snr_est, triggered, txtMsg);
+                    fprintf(fstatus, "%s: state: %s peak: %d sync: %d SNR: %3.1f triggered: %d recordany: %d txtMsg: %s\n", 
+                            timeStr, state_str[state], peak, sync, snr_est, triggered, recordAny, txtMsg);
                     fprintf(fstatus, "</body>\n</html>\n");
                     fclose(fstatus);
                 }
@@ -1058,5 +1068,66 @@ void lowerRTS(void)
         ioctl(com_handle, TIOCMBIC, &flags);
     }
 #endif
+}
+
+#define BUFSIZE          2048
+#define SERVICE_PORT	21234
+
+void *udp_listener_thread(void* p) {
+    struct sockaddr_in myaddr;	/* our address */
+    struct sockaddr_in remaddr;	/* remote address */
+    socklen_t addrlen = sizeof(remaddr);		/* length of addresses */
+    int recvlen;			/* # bytes received */
+    int fd;				/* our socket */
+    char txt[BUFSIZE];	/* receive buffer */
+
+    /* create a UDP socket */
+
+    if ((fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        fprintf(stderr, "cannot create socket\n");
+        return 0;
+    }
+
+    /* bind the socket to any valid IP address and a specific port */
+
+    memset((char *)&myaddr, 0, sizeof(myaddr));
+    myaddr.sin_family = AF_INET;
+    myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    myaddr.sin_port = htons(SERVICE_PORT);
+
+    if (bind(fd, (struct sockaddr *)&myaddr, sizeof(myaddr)) < 0) {
+        fprintf(stderr, "bind failed");
+        return 0;
+    }
+
+    /* now loop, receiving data and printing what we received */
+
+    while (runListener) {
+        fprintf(stderr, "udp listener waiting on port %d - send me a command!\n", SERVICE_PORT);
+        recvlen = recvfrom(fd, txt, BUFSIZE, 0, (struct sockaddr *)&remaddr, &addrlen);
+        fprintf(stderr, "received %d bytes\n", recvlen);
+        if (recvlen > 0) {
+            txt[recvlen] = 0;
+            fprintf(stderr, "txt: %s\n", txt);
+            if (strcmp(txt, "recordany") == 0) {
+                recordAny = 1;
+                fprintf(stderr, "Next signal to sync will be recorded regardless of txt msg\n");
+            }
+        }
+    }
+
+    return NULL;
+}
+
+
+pthread_t start_udp_listener_thread(void) {
+    pthread_t athread;
+
+    runListener = 1;
+
+    if (!pthread_create(&athread, NULL, udp_listener_thread, NULL) != 0)
+        fprintf(stderr, "Can't create UDP listener thread\n");
+
+    return athread;
 }
 
