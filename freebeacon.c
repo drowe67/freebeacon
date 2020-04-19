@@ -473,7 +473,7 @@ int main(int argc, char *argv[]) {
 
     freedv_set_callback_txt(f, callbackNextRxChar, callbackNextTxChar, NULL);
 
-    fifo = fifo_create(4*n8m); assert(fifo != NULL);   /* fifo to smooth out variation in demod nin          */
+    fifo = codec2_fifo_create(4*n8m); assert(fifo != NULL);   /* fifo to smooth out variation in demod nin          */
 
     /* states for sample rate converters */
 
@@ -613,12 +613,12 @@ int main(int argc, char *argv[]) {
                 if (rxfsm[j] > peak)
                     peak = rxfsm[j];
 
-            fifo_write(fifo, rxfsm, n8m_out);
+            codec2_fifo_write(fifo, rxfsm, n8m_out);
 
             /* demodulate to decoded speech samples */
 
             nin = freedv_nin(f);
-            while (fifo_read(fifo, demod_in, nin) == 0) {
+            while (codec2_fifo_read(fifo, demod_in, nin) == 0) {
 	        int nout = 0;
                 nout = freedv_rx(f, speech_out, demod_in);
                 freedv_get_modem_stats(f, &sync, &snr_est);
@@ -871,7 +871,7 @@ int main(int argc, char *argv[]) {
 
     /* clean up states */
 
-    fifo_destroy(fifo);
+    codec2_fifo_destroy(fifo);
     src_delete(rxsrc);
     src_delete(txsrc);
     src_delete(playsrc);

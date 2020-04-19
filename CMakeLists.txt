@@ -160,8 +160,11 @@ if(NOT USE_STATIC_CODEC2)
     endif()
     if(codec2_FOUND)
         get_target_property(CODEC2_LIBRARY codec2 LOCATION)
+        get_target_property(CODEC2_INCLUDE_DIRS codec2 INTERFACE_INCLUDE_DIRECTORIES)
         message(STATUS "  codec2 library: ${CODEC2_LIBRARY}")
-        message(STATUS "  codec2 headers: ${codec2_INCLUDE_DIRS}")
+        message(STATUS "  codec2 headers: ${CODEC2_INCLUDE_DIRS}")
+        include_directories(${CODEC2_INCLUDE_DIRS})
+        list(APPEND FREEBEACON_LINK_LIBS ${CODEC2_LIBRARY})
     else()
         # Try to find manually
         find_path(CODEC2_INCLUDE_DIRS codec2.h
