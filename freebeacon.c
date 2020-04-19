@@ -364,7 +364,7 @@ int main(int argc, char *argv[]) {
  
     /* Process command line options -----------------------------------------------------------*/
 
-    char* opt_string = "hlvc:t";
+    char* opt_string = "hlvc:tm:";
     struct option long_options[] = {
         { "dev", required_argument, &devNum, 1 },
         { "trigger", required_argument, &triggerf, 1 },
@@ -376,7 +376,7 @@ int main(int argc, char *argv[]) {
         { "rpigpio", required_argument, &rpigpiof, 1 },
         { "rpigpioalive", required_argument, &rpigpioalivef, 1 },
         { "list", no_argument, NULL, 'l' },
-        { "mode", no_argument, NULL, 'm' },
+        { "mode", required_argument, NULL, 'm'},
         { "help", no_argument, NULL, 'h' },
         { NULL, no_argument, NULL, 0 }
     };
@@ -491,7 +491,7 @@ int main(int argc, char *argv[]) {
 
     freedv_set_callback_txt(f, callbackNextRxChar, callbackNextTxChar, NULL);
 
-    fifo = codec2_fifo_create(4*n8m); assert(fifo != NULL);   /* fifo to smooth out variation in demod nin          */
+    fifo = codec2_fifo_create(4*n8m); assert(fifo != NULL);   /* fifo to smooth out variation in demod nin    */
 
     /* states for sample rate converters */
 
@@ -611,7 +611,7 @@ int main(int argc, char *argv[]) {
             short demod_in[freedv_get_n_max_modem_samples(f)];
             short speech_out[freedv_get_n_speech_samples(f)];
 
-            /* Read samples froun sound card, resample to modem sample rate */
+            /* Read samples from sound card, resample to modem sample rate */
 
             Pa_ReadStream(stream, stereo, n48);
 
@@ -1144,7 +1144,7 @@ pthread_t start_udp_listener_thread(void) {
 
     runListener = 1;
 
-    if (!pthread_create(&athread, NULL, udp_listener_thread, NULL) != 0)
+    if (pthread_create(&athread, NULL, udp_listener_thread, NULL) != 0)
         fprintf(stderr, "Can't create UDP listener thread\n");
 
     return athread;
