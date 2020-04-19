@@ -159,8 +159,9 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 	fprintf(stderr, "\nFreeBeacon - FreeDV Beacon\n"
 		"usage: %s [OPTIONS]\n\n"
                 "Options:\n"
-                "\t-l --list (audio devices)\n"
                 "\t-c        (comm port for Tx PTT)\n"
+                "\t-l --list (audio devices)\n"
+                "\t-m --mode 1600|700C|700D\n"
                 "\t-t        (tx on start up, useful for testing)\n"
                 "\t-v        (verbose)\n", argv[0]);
         for(i=0; i<num_opts-1; i++) {
@@ -328,6 +329,7 @@ int main(int argc, char *argv[]) {
     char                statusPageFileName[MAX_CHAR];
     FILE               *fstatus;
     int                 gpioAliveState = 0;
+    int                 freedv_mode;
     
     /* debug raw file */
 
@@ -353,7 +355,8 @@ int main(int argc, char *argv[]) {
     *rpigpio = 0;
     *rpigpioalive = 0;
     *statusPageFileName = 0;
-
+    freedv_mode = FREEDV_MODE_1600;
+    
     if (Pa_Initialize()) {
         fprintf(stderr, "Port Audio failed to initialize");
         exit(1);
@@ -373,6 +376,7 @@ int main(int argc, char *argv[]) {
         { "rpigpio", required_argument, &rpigpiof, 1 },
         { "rpigpioalive", required_argument, &rpigpioalivef, 1 },
         { "list", no_argument, NULL, 'l' },
+        { "mode", no_argument, NULL, 'm' },
         { "help", no_argument, NULL, 'h' },
         { NULL, no_argument, NULL, 0 }
     };
@@ -450,7 +454,21 @@ int main(int argc, char *argv[]) {
             exit(0);
             break;
 
-        default:
+        case 'm':
+            if (strcmp(optarg, "1600") == 0)
+                freedv_mode = FREEDV_MODE_1600;
+            else if (strcmp(optarg, "700C") == 0)
+                freedv_mode = FREEDV_MODE_700C;
+            else if (strcmp(optarg, "700D") == 0)
+                freedv_mode = FREEDV_MODE_700D;
+            else {
+                 fprintf(stderr, "Unknown mode: %s\n", optarg);
+                 exit(1);
+            }
+                         
+            break;
+
+       default:
             /* This will never be reached */
             break;
         }
@@ -458,7 +476,7 @@ int main(int argc, char *argv[]) {
 
     /* Open Sound Device and start processing --------------------------------------------------------------*/
 
-    f = freedv_open(FREEDV_MODE_1600); assert(f != NULL);
+    f = freedv_open(freedv_mode); assert(f != NULL);
     int   fsm   = freedv_get_modem_sample_rate(f);     /* modem sample rate                                   */
     int   n8m   = freedv_get_n_nom_modem_samples(f);   /* nominal modem sample buffer size at fsm sample rate */
     int   n48   = n8m*fssc/fsm;                        /* nominal modem sample buffer size at 48kHz           */
@@ -544,6 +562,7 @@ int main(int argc, char *argv[]) {
     /* Init for main loop ----------------------------------------------------------------------------*/
 
     fprintf(stderr, "\nCtrl-C to exit\n");
+    fprintf(stderr, "freedv_mode: %d\n", freedv_mode);
     fprintf(stderr, "trigger string: %s\ntxFileName: %s\n", triggerString, txFileName);
     fprintf(stderr, "PortAudio devNum: %d\nsamplerate: %d\n", devNum, fssc);
     fprintf(stderr, "WaveFileWritePath: %s\n", waveFileWritePath);
