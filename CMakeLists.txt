@@ -147,10 +147,17 @@ message(STATUS "Threads library flags: ${CMAKE_THREAD_LIBS_INIT}")
 # Find codec2
 #
 if(NOT USE_STATIC_CODEC2)
-    message(STATUS "Looking for codec2...")
-    # 'CONFIG' removed due to incompatibility with cmake version
-    # in Ubuntu 12.04 (Precise) -- Stuart Longland
-    find_package(codec2 QUIET)
+    if(CODEC2_BUILD_DIR)
+        message(STATUS "Using codec2 from build directory...")
+        find_package(codec2 REQUIRED
+            NO_DEFAULT_PATH
+            PATHS ${CODEC2_BUILD_DIR}
+            CONFIGS codec2.cmake
+        )
+    else()
+        message(STATUS "Looking for codec2...")
+        find_package(codec2 QUIET)
+    endif()
     if(codec2_FOUND)
         get_target_property(CODEC2_LIBRARY codec2 LOCATION)
         message(STATUS "  codec2 library: ${CODEC2_LIBRARY}")

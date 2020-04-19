@@ -29,7 +29,9 @@ Initially developed Dec 2015
    sudo apt-get install git cmake sox libsamplerate0-dev portaudio19-dev libsndfile1-dev```
    ```
    
-1. Build and Install codec2-dev:
+1. Building Method 1 - installs codec 2 libraries on your system:
+
+   Install codec2-dev:
     ```
     git clone https://github.com/drowe67/codec2.git
     cd codec2-dev
@@ -48,7 +50,7 @@ Initially developed Dec 2015
     ldconfig -v | grep codec2
     ```
     
-1. Build FreeBeacon:
+    Build FreeBeacon:
     ```
     git clone https://github.com/drowe67/freebeacon.git
     cd freebeacon
@@ -57,7 +59,22 @@ Initially developed Dec 2015
     cmake ../
     make
     ```
-    
+
+1. Building Method 2 - without system wide codec 2 installation
+   ```
+   git clone https://github.com/drowe67/codec2.git
+   cd codec2-dev && mkdir build_linux && cd build_linux
+   cmake ../ && make
+   ```
+
+   Instruct freebeacon cmake to use local codec2 directory:
+     ```
+    git clone https://github.com/drowe67/freebeacon.git
+    cd freebeacon && mkdir build_linux cd build_linux
+    cmake -DCODEC2_BUILD_DIR=~/codec2/build_linux ..
+    make
+    ```
+  
 1. Testing:
 
     Plug in your USB sound card and USB RS232 devices.  Use alsamixer
