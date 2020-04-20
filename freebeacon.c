@@ -641,6 +641,7 @@ int main(int argc, char *argv[]) {
 	        int nout = 0;
                 nout = freedv_rx(f, speech_out, demod_in);
                 freedv_get_modem_stats(f, &sync, &snr_est);
+                nin = freedv_nin(f);
 
                 if (sfRecFileFromRadio)
                     sf_write_short(sfRecFileFromRadio, demod_in, nin);
