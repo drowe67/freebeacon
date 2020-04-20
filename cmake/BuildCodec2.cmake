@@ -14,12 +14,12 @@ endif()
 
 include(ExternalProject)
 ExternalProject_Add(codec2
-   SVN_REPOSITORY https://svn.code.sf.net/p/freetel/code/codec2-dev
+   GIT_REPOSITORY https://github.com/drowe67/codec2.git
    CMAKE_ARGS ${CODEC2_CMAKE_ARGS} ${SPEEXDSP_CMAKE_ARGS}
    INSTALL_COMMAND ""
 )
 set(CODEC2_LIBRARIES
     ${CMAKE_BINARY_DIR}/codec2-prefix/src/codec2-build/src/libcodec2.a)
 include_directories(${CMAKE_BINARY_DIR}/codec2-prefix/src/codec2/src)
-list(APPEND FREEDV_LINK_LIBS ${CODEC2_LIBRARIES})
-list(APPEND FREEDV_STATIC_DEPS codec2)
+list(APPEND FREEBEACON_LINK_LIBS ${CODEC2_LIBRARIES})
+list(APPEND FREEBEACON_STATIC_DEPS codec2)
