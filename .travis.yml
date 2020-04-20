@@ -17,3 +17,5 @@ script:
     - cd ${FREEBEACONDIR}
     - mkdir -p build_linux && cd build_linux
     - cmake -DCODEC2_BUILD_DIR=${CODEC2DIR}/build_linux .. && make
+    - ./freebeacon -h
+    
