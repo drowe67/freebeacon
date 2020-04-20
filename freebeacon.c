@@ -189,7 +189,7 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 		fprintf(stderr, "\t--%s%s\n", long_options[i].name, option_parameters);
 	}
 
-	exit(1);
+	exit(0);
 }
 
 
