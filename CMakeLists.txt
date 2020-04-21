@@ -266,7 +266,7 @@ else(NOT USE_STATIC_SNDFILE)
 endif(NOT USE_STATIC_SNDFILE)
 
 add_executable(freebeacon freebeacon.c)
-target_link_libraries(freebeacon ${FREEBEACON_LINK_LIBS})
+target_link_libraries(freebeacon ${FREEBEACON_LINK_LIBS} codec2)
 if(FREEBEACON_STATIC_DEPS)
     add_dependencies(freebeacon ${FREEBEACON_STATIC_DEPS})
 endif()
