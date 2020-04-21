@@ -9,6 +9,7 @@ addons:
       git cmake sox libsamplerate0-dev portaudio19-dev libsndfile-dev
       
 script:
+    - cmake --version
     - export FREEBEACONDIR=${PWD}
     - export CODEC2DIR=${FREEBEACONDIR}/codec2
     - git clone https://github.com/drowe67/codec2.git
@@ -16,6 +17,7 @@ script:
     - cmake .. && make
     - cd ${FREEBEACONDIR}
     - mkdir -p build_linux && cd build_linux
-    - cmake -DCODEC2_BUILD_DIR=${CODEC2DIR}/build_linux .. && make
+    - cmake -DCODEC2_BUILD_DIR=${CODEC2DIR}/build_linux .. && make VERBOSE=1
+    - ldd freebeacon | grep codec2
     - ./freebeacon -h
-    
+
