@@ -45,7 +45,7 @@ configure_file(cmake/version.h.in version.h @ONLY)
 
 # Set default build type
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Release")
+    set(CMAKE_BUILD_TYPE "Debug")
     message(STATUS "Build type not specified, defaulting to ${CMAKE_BUILD_TYPE}")
 endif(NOT CMAKE_BUILD_TYPE)
 
@@ -147,14 +147,24 @@ message(STATUS "Threads library flags: ${CMAKE_THREAD_LIBS_INIT}")
 # Find codec2
 #
 if(NOT USE_STATIC_CODEC2)
-    message(STATUS "Looking for codec2...")
-    # 'CONFIG' removed due to incompatibility with cmake version
-    # in Ubuntu 12.04 (Precise) -- Stuart Longland
-    find_package(codec2 QUIET)
+    if(CODEC2_BUILD_DIR)
+        message(STATUS "Using codec2 from build directory...")
+        find_package(codec2 REQUIRED
+            NO_DEFAULT_PATH
+            PATHS ${CODEC2_BUILD_DIR}
+            CONFIGS codec2.cmake
+        )
+    else()
+        message(STATUS "Looking for codec2...")
+        find_package(codec2 QUIET)
+    endif()
     if(codec2_FOUND)
         get_target_property(CODEC2_LIBRARY codec2 LOCATION)
+        get_target_property(CODEC2_INCLUDE_DIRS codec2 INTERFACE_INCLUDE_DIRECTORIES)
         message(STATUS "  codec2 library: ${CODEC2_LIBRARY}")
-        message(STATUS "  codec2 headers: ${codec2_INCLUDE_DIRS}")
+        message(STATUS "  codec2 headers: ${CODEC2_INCLUDE_DIRS}")
+        include_directories(${CODEC2_INCLUDE_DIRS})
+        list(APPEND FREEBEACON_LINK_LIBS ${CODEC2_LIBRARY})
     else()
         # Try to find manually
         find_path(CODEC2_INCLUDE_DIRS codec2.h
@@ -256,7 +266,7 @@ else(NOT USE_STATIC_SNDFILE)
 endif(NOT USE_STATIC_SNDFILE)
 
 add_executable(freebeacon freebeacon.c)
-target_link_libraries(freebeacon ${FREEBEACON_LINK_LIBS})
+target_link_libraries(freebeacon ${FREEBEACON_LINK_LIBS} codec2)
 if(FREEBEACON_STATIC_DEPS)
     add_dependencies(freebeacon ${FREEBEACON_STATIC_DEPS})
 endif()

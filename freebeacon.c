@@ -159,8 +159,9 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 	fprintf(stderr, "\nFreeBeacon - FreeDV Beacon\n"
 		"usage: %s [OPTIONS]\n\n"
                 "Options:\n"
-                "\t-l --list (audio devices)\n"
                 "\t-c        (comm port for Tx PTT)\n"
+                "\t-l --list (audio devices)\n"
+                "\t-m --mode 1600|700C|700D\n"
                 "\t-t        (tx on start up, useful for testing)\n"
                 "\t-v        (verbose)\n", argv[0]);
         for(i=0; i<num_opts-1; i++) {
@@ -188,7 +189,7 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 		fprintf(stderr, "\t--%s%s\n", long_options[i].name, option_parameters);
 	}
 
-	exit(1);
+	exit(0);
 }
 
 
@@ -328,6 +329,7 @@ int main(int argc, char *argv[]) {
     char                statusPageFileName[MAX_CHAR];
     FILE               *fstatus;
     int                 gpioAliveState = 0;
+    int                 freedv_mode;
     
     /* debug raw file */
 
@@ -353,7 +355,8 @@ int main(int argc, char *argv[]) {
     *rpigpio = 0;
     *rpigpioalive = 0;
     *statusPageFileName = 0;
-
+    freedv_mode = FREEDV_MODE_1600;
+    
     if (Pa_Initialize()) {
         fprintf(stderr, "Port Audio failed to initialize");
         exit(1);
@@ -361,7 +364,7 @@ int main(int argc, char *argv[]) {
  
     /* Process command line options -----------------------------------------------------------*/
 
-    char* opt_string = "hlvc:t";
+    char* opt_string = "hlvc:tm:";
     struct option long_options[] = {
         { "dev", required_argument, &devNum, 1 },
         { "trigger", required_argument, &triggerf, 1 },
@@ -373,6 +376,7 @@ int main(int argc, char *argv[]) {
         { "rpigpio", required_argument, &rpigpiof, 1 },
         { "rpigpioalive", required_argument, &rpigpioalivef, 1 },
         { "list", no_argument, NULL, 'l' },
+        { "mode", required_argument, NULL, 'm'},
         { "help", no_argument, NULL, 'h' },
         { NULL, no_argument, NULL, 0 }
     };
@@ -450,7 +454,21 @@ int main(int argc, char *argv[]) {
             exit(0);
             break;
 
-        default:
+        case 'm':
+            if (strcmp(optarg, "1600") == 0)
+                freedv_mode = FREEDV_MODE_1600;
+            else if (strcmp(optarg, "700C") == 0)
+                freedv_mode = FREEDV_MODE_700C;
+            else if (strcmp(optarg, "700D") == 0)
+                freedv_mode = FREEDV_MODE_700D;
+            else {
+                 fprintf(stderr, "Unknown mode: %s\n", optarg);
+                 exit(1);
+            }
+                         
+            break;
+
+       default:
             /* This will never be reached */
             break;
         }
@@ -458,7 +476,7 @@ int main(int argc, char *argv[]) {
 
     /* Open Sound Device and start processing --------------------------------------------------------------*/
 
-    f = freedv_open(FREEDV_MODE_1600); assert(f != NULL);
+    f = freedv_open(freedv_mode); assert(f != NULL);
     int   fsm   = freedv_get_modem_sample_rate(f);     /* modem sample rate                                   */
     int   n8m   = freedv_get_n_nom_modem_samples(f);   /* nominal modem sample buffer size at fsm sample rate */
     int   n48   = n8m*fssc/fsm;                        /* nominal modem sample buffer size at 48kHz           */
@@ -473,7 +491,7 @@ int main(int argc, char *argv[]) {
 
     freedv_set_callback_txt(f, callbackNextRxChar, callbackNextTxChar, NULL);
 
-    fifo = fifo_create(4*n8m); assert(fifo != NULL);   /* fifo to smooth out variation in demod nin          */
+    fifo = codec2_fifo_create(4*n8m); assert(fifo != NULL);   /* fifo to smooth out variation in demod nin    */
 
     /* states for sample rate converters */
 
@@ -544,6 +562,7 @@ int main(int argc, char *argv[]) {
     /* Init for main loop ----------------------------------------------------------------------------*/
 
     fprintf(stderr, "\nCtrl-C to exit\n");
+    fprintf(stderr, "freedv_mode: %d\n", freedv_mode);
     fprintf(stderr, "trigger string: %s\ntxFileName: %s\n", triggerString, txFileName);
     fprintf(stderr, "PortAudio devNum: %d\nsamplerate: %d\n", devNum, fssc);
     fprintf(stderr, "WaveFileWritePath: %s\n", waveFileWritePath);
@@ -592,7 +611,7 @@ int main(int argc, char *argv[]) {
             short demod_in[freedv_get_n_max_modem_samples(f)];
             short speech_out[freedv_get_n_speech_samples(f)];
 
-            /* Read samples froun sound card, resample to modem sample rate */
+            /* Read samples from sound card, resample to modem sample rate */
 
             Pa_ReadStream(stream, stereo, n48);
 
@@ -613,15 +632,16 @@ int main(int argc, char *argv[]) {
                 if (rxfsm[j] > peak)
                     peak = rxfsm[j];
 
-            fifo_write(fifo, rxfsm, n8m_out);
+            codec2_fifo_write(fifo, rxfsm, n8m_out);
 
             /* demodulate to decoded speech samples */
 
             nin = freedv_nin(f);
-            while (fifo_read(fifo, demod_in, nin) == 0) {
+            while (codec2_fifo_read(fifo, demod_in, nin) == 0) {
 	        int nout = 0;
                 nout = freedv_rx(f, speech_out, demod_in);
                 freedv_get_modem_stats(f, &sync, &snr_est);
+                nin = freedv_nin(f);
 
                 if (sfRecFileFromRadio)
                     sf_write_short(sfRecFileFromRadio, demod_in, nin);
@@ -871,7 +891,7 @@ int main(int argc, char *argv[]) {
 
     /* clean up states */
 
-    fifo_destroy(fifo);
+    codec2_fifo_destroy(fifo);
     src_delete(rxsrc);
     src_delete(txsrc);
     src_delete(playsrc);
@@ -1125,7 +1145,7 @@ pthread_t start_udp_listener_thread(void) {
 
     runListener = 1;
 
-    if (!pthread_create(&athread, NULL, udp_listener_thread, NULL) != 0)
+    if (pthread_create(&athread, NULL, udp_listener_thread, NULL) != 0)
         fprintf(stderr, "Can't create UDP listener thread\n");
 
     return athread;
