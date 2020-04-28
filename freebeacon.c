@@ -161,7 +161,7 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
                 "Options:\n"
                 "\t-c        (comm port for Tx PTT)\n"
                 "\t-l --list (audio devices)\n"
-                "\t-m --mode 1600|700C|700D\n"
+                "\t-m --mode 1600|700D\n"
                 "\t-t        (tx on start up, useful for testing)\n"
                 "\t-v        (verbose)\n", argv[0]);
         for(i=0; i<num_opts-1; i++) {
@@ -457,8 +457,6 @@ int main(int argc, char *argv[]) {
         case 'm':
             if (strcmp(optarg, "1600") == 0)
                 freedv_mode = FREEDV_MODE_1600;
-            else if (strcmp(optarg, "700C") == 0)
-                freedv_mode = FREEDV_MODE_700C;
             else if (strcmp(optarg, "700D") == 0)
                 freedv_mode = FREEDV_MODE_700D;
             else {
