@@ -4,6 +4,12 @@
   Created Dec 2015
 
   FreeDV Beacon. 
+
+
+This testing version by VK4YA has:-
+         Basic Hamlib PTT control 
+         700C mode auto-recording without trigger word
+   - this is not an official version!      
 */
 
 #include <assert.h>
@@ -35,6 +41,7 @@
 #include "codec2_fifo.h"
 #include "modem_stats.h"
 #include "freedv_api.h"
+#include "../hamlib/rig.h"
 
 #define MAX_CHAR            80
 #define FS8                 8000                // codec audio sample rate fixed at 8 kHz
@@ -76,6 +83,13 @@ void lowerDTR(void);
 void raiseRTS(void);
 void lowerRTS(void);
 pthread_t start_udp_listener_thread(void);
+
+/* hamlib static vars */
+
+hamlib_port_t myport;
+RIG *my_rig;
+rig_model_t myrig_model;        // int
+int retcode;
 
 
 /*--------------------------------------------------------------------------------------------------------*\
@@ -159,9 +173,10 @@ void printHelp(const struct option* long_options, int num_opts, char* argv[])
 	fprintf(stderr, "\nFreeBeacon - FreeDV Beacon\n"
 		"usage: %s [OPTIONS]\n\n"
                 "Options:\n"
-                "\t-c        (comm port for Tx PTT)\n"
+                "\t-c        (comm port for Tx or CAT PTT)\n"
+                "\t-u        (Hamlib CAT model number [use rigctl -l to see list])\n"                
                 "\t-l --list (audio devices)\n"
-                "\t-m --mode 1600|700D\n"
+                "\t-m --mode 1600|700C|700D\n"
                 "\t-t        (tx on start up, useful for testing)\n"
                 "\t-v        (verbose)\n", argv[0]);
         for(i=0; i<num_opts-1; i++) {
@@ -293,6 +308,55 @@ void getTimeStr(char timeStr[]) {
 }
 
 
+void hamlib_ptt_on()
+{
+    printf("Freebeacon: Setting rig PTT ON.\n");
+    retcode = rig_set_ptt(my_rig, RIG_VFO_A, RIG_PTT_ON); 
+
+    if (retcode != RIG_OK)
+    {
+        printf("rig_set_ptt: error = %s \n", rigerror(retcode));
+    }
+}
+
+void hamlib_ptt_off()
+{
+    printf("Freebeacon: Setting rig PTT OFF.\n");
+    retcode = rig_set_ptt(my_rig, RIG_VFO_A, RIG_PTT_OFF); 
+
+    if (retcode != RIG_OK)
+    {
+        printf("rig_set_ptt: error = %s \n", rigerror(retcode));
+    }
+}
+
+int hamlib_init(rig_model_t myrig_model, char *commport)
+{
+//  rig_load_all_backends();
+//  rig_set_debug(RIG_DEBUG_VERBOSE);   
+//  rig_set_debug(RIG_DEBUG_TRACE);
+    rig_set_debug(RIG_DEBUG_ERR);   
+    
+    fprintf(stderr,"Freebeacon: Calling Rig Init\n");                  
+ //   myrig_model = RIG_MODEL_IC7100; // rig_probe(&myport);
+    my_rig = rig_init(myrig_model);
+    if (!my_rig) {
+        fprintf(stderr,"Freebeacon: Hamlib Rig Init FAILED\n");
+        return(1);
+    }
+    
+    strncpy(my_rig->state.rigport.pathname, commport, FILPATHLEN - 1);   
+         
+    retcode = rig_open(my_rig);
+    if (retcode != RIG_OK)
+    {
+        fprintf(stderr,"Freebeacon: Hamlib rig_open: error = %s\n", rigerror(retcode));
+        return(2);
+    }   
+       
+    fprintf(stderr,"Freebeacon: Hamlib Rig opened okay\n");
+    return(0);
+}
 /*--------------------------------------------------------------------------------------------------------*\
 
                                                   MAIN
@@ -338,6 +402,8 @@ int main(int argc, char *argv[]) {
 
     /* Defaults -------------------------------------------------------------------------------*/
 
+
+
     devNum = 0;
     fssc = FS48;
     sprintf(triggerString, "FreeBeacon");
@@ -356,6 +422,7 @@ int main(int argc, char *argv[]) {
     *rpigpioalive = 0;
     *statusPageFileName = 0;
     freedv_mode = FREEDV_MODE_1600;
+    recordAny = 0;
     
     if (Pa_Initialize()) {
         fprintf(stderr, "Port Audio failed to initialize");
@@ -364,9 +431,9 @@ int main(int argc, char *argv[]) {
  
     /* Process command line options -----------------------------------------------------------*/
 
-    char* opt_string = "hlvc:tm:";
+    char* opt_string = "hlvc:u:tm:";
     struct option long_options[] = {
-        { "dev", required_argument, &devNum, 1 },
+        { "dev", required_argument, &devNum, 1 }, 
         { "trigger", required_argument, &triggerf, 1 },
         { "txfilename", required_argument, &txfilenamef, 1 },
         { "callsign", required_argument, &callsignf, 1 },
@@ -429,9 +496,24 @@ int main(int argc, char *argv[]) {
             break;
 
         case 'c':
-            strcpy(commport, optarg);
-            if (openComPort(commport) != 0) {
+           strcpy(commport, optarg);
+           if (openComPort(commport) != 0) {
                 fprintf(stderr, "Can't open comm port: %s\n",commport);
+               exit(1);
+            }
+            break;
+
+        case 'u':       // hamlib CAT rig
+            myrig_model = atoi(optarg);      // rig number not its name for now
+            if ((myrig_model == 0 ) || (com_handle == COM_HANDLE_INVALID)) {
+                fprintf(stderr,"No Comm port? use 'c' option before 'u' option\n");
+                fprintf(stderr,"Rig Hamlib model numbers found use rigctl -l to see list\n");                
+                exit(1);
+            }           
+            closeComPort();  // let hamlib use it now
+            fprintf(stderr,"Freebeacon: Opening Hamlib with model %d\n",myrig_model);
+            if (hamlib_init(myrig_model, commport)) {
+                fprintf(stderr,"Hamlib failed to initilise: [use rigctl -l to see list]\n");                
                 exit(1);
             }
             break;
@@ -457,6 +539,10 @@ int main(int argc, char *argv[]) {
         case 'm':
             if (strcmp(optarg, "1600") == 0)
                 freedv_mode = FREEDV_MODE_1600;
+            else if (strcmp(optarg, "700C") == 0) {
+		            recordAny = 1;	// no trigger word data stream so record regardless
+                freedv_mode = FREEDV_MODE_700C;
+	    }
             else if (strcmp(optarg, "700D") == 0)
                 freedv_mode = FREEDV_MODE_700D;
             else {
@@ -577,7 +663,6 @@ int main(int argc, char *argv[]) {
 
     signal(SIGINT, intHandler);  /* ctrl-C to exit gracefully */
     keepRunning = 1;
-    recordAny = 0;
     ptxtMsg = txtMsg;
     triggered = 0;
     logTimer = 0;
@@ -597,6 +682,7 @@ int main(int argc, char *argv[]) {
         if (*rpigpio) {
             sys_gpio(rpigpio_path, "1");
         }
+        hamlib_ptt_on();
         sfPlayFile = openPlayFile(txFileName, &sfFs);
     }
 
@@ -748,7 +834,9 @@ int main(int argc, char *argv[]) {
                 sfRecFileFromRadio = openRecFile(recFileFromRadioName, fsm);
                 sfRecFileDecAudio = openRecFile(recFileDecAudioName, FS8);
                 haveRecording = 1;
-                recordAny = 0;
+                if (freedv_mode != FREEDV_MODE_700C) {
+		              recordAny = 0;
+		            }
                 tnout = 0;
             }
 
@@ -786,6 +874,7 @@ int main(int argc, char *argv[]) {
                         if (*rpigpio) {
                             sys_gpio(rpigpio_path, "1");
                         }
+                        hamlib_ptt_on();                        
                         next_state = STX;
                     }
                     else {
@@ -808,6 +897,7 @@ int main(int argc, char *argv[]) {
                 if (*rpigpio) {
                     sys_gpio(rpigpio_path, "0");
                 }
+                hamlib_ptt_off();                
                 next_state = SRX_IDLE;
                 triggered = 0;
                 haveRecording = 0;
@@ -877,6 +967,10 @@ int main(int argc, char *argv[]) {
         sys_gpio("/sys/class/gpio/unexport", rpigpioalive);
     }
  
+    hamlib_ptt_off();
+    rig_close(my_rig);
+    rig_cleanup(my_rig);
+     
     /* Shut down port audio */
 
     err = Pa_StopStream(stream);
