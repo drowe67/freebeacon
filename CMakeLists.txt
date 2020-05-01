@@ -265,6 +265,26 @@ else(NOT USE_STATIC_SNDFILE)
     include(cmake/BuildSndfile.cmake)
 endif(NOT USE_STATIC_SNDFILE)
 
+#
+# Hamlib library
+#
+message(STATUS "Looking for hamlib...")
+find_path(HAMLIB_INCLUDE_DIR hamlib/rig.h)
+find_library(HAMLIB_LIBRARY hamlib PATH_SUFFIXES hamlib)
+message(STATUS "  Hamlib library: ${HAMLIB_LIBRARY}")
+message(STATUS "  Hamlib headers: ${HAMLIB_INCLUDE_DIR}")
+if(HAMLIB_LIBRARY AND HAMLIB_INCLUDE_DIR)
+    message(STATUS "Hamlib library found.")
+    include_directories(${HAMLIB_INCLUDE_DIR})
+    list(APPEND FREEBEACON_LINK_LIBS ${HAMLIB_LIBRARY})
+else(HAMLIB_LIBRARY AND HAMLIB_INCLUDE_DIR)
+    message(FATAL_ERROR "hamlib not found.
+On Linux systems try installing:
+    hamlib-devel  (RPM based systems)
+    libhamlib-dev (DEB based systems)"
+    )
+endif(HAMLIB_LIBRARY AND HAMLIB_INCLUDE_DIR)
+
 add_executable(freebeacon freebeacon.c)
 target_link_libraries(freebeacon ${FREEBEACON_LINK_LIBS} codec2)
 if(FREEBEACON_STATIC_DEPS)

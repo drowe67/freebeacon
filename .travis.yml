@@ -6,7 +6,7 @@ addons:
   apt:
     packages:
       libc6-i386      
-      git cmake sox libsamplerate0-dev portaudio19-dev libsndfile-dev
+      git cmake sox libsamplerate0-dev portaudio19-dev libsndfile-dev libhamlib-dev
       
 script:
     - cmake --version
