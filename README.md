@@ -1,7 +1,12 @@
 # Introduction
 
-FreeDV 1600 beacon.  Listens for FreeDV signals, then transmits a reply. Places the received signal files on a web server. Requires a
-Linux machine with a sound card and RS232-PTT interface to your radio. Just one sound card is required.  Can run on machines as small as a Raspberry Pi.
+FreeDV beacon:
++ Listens for FreeDV signals, then transmits a reply.
++ Supports FreeDV 1600/700C/700D modes.
++ Places the received signal files on a web server.
++ Requires a Linux machine with a sound card and RS232-PTT (or Hamlib CAT) interface to your radio.
++ Just one sound card is required.
++ Can run on machines as small as a Raspberry Pi.
 
 When a "trigger" string is detected in the rx FreeDV text message (e.g. "hello beacon", or the beacon callsign), the beacon will transmit a signal report back to you.
 
@@ -19,8 +24,11 @@ A whole lot of code was lifted from freedv-dev for this program.
 
 ## Credits
 
-David Rowe, John Nunan, Richard Shaw
-Initially developed Dec 2015
++ David Rowe, John Nunan
++ Richard Shaw - CMake
++ Bob Wisdom - Hamlib, FreeDV 700C & 700D modes
++ Initially developed Dec 2015
++ Refactored for GitHub, added Hamlib, FreeDV 700C & 700D modes in 2020
 
 # Building and Installation
 
