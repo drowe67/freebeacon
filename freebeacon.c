@@ -1,15 +1,9 @@
 /* 
   freebeacon.c
-  David Rowe 
-  Created Dec 2015
+  David Rowe VK5DGR
+  Hamlib PTT and 700C support Bob VK4YA
 
-  FreeDV Beacon. 
-
-
-This testing version by VK4YA has:-
-         Basic Hamlib PTT control 
-         700C mode auto-recording without trigger word
-   - this is not an official version!      
+  FreeDV Beacon.
 */
 
 #include <assert.h>
@@ -338,7 +332,6 @@ int hamlib_init(rig_model_t myrig_model, char *commport)
     rig_set_debug(RIG_DEBUG_ERR);   
     
     fprintf(stderr,"Freebeacon: Calling Rig Init\n");                  
- //   myrig_model = RIG_MODEL_IC7100; // rig_probe(&myport);
     my_rig = rig_init(myrig_model);
     if (!my_rig) {
         fprintf(stderr,"Freebeacon: Hamlib Rig Init FAILED\n");
@@ -357,7 +350,8 @@ int hamlib_init(rig_model_t myrig_model, char *commport)
     fprintf(stderr,"Freebeacon: Hamlib Rig opened okay\n");
     return(0);
 }
-/*--------------------------------------------------------------------------------------------------------*\
+
+/*--------------------------------------------------------------------------------------------------------* \
 
                                                   MAIN
 
@@ -402,8 +396,6 @@ int main(int argc, char *argv[]) {
 
     /* Defaults -------------------------------------------------------------------------------*/
 
-
-
     devNum = 0;
     fssc = FS48;
     sprintf(triggerString, "FreeBeacon");
@@ -423,6 +415,8 @@ int main(int argc, char *argv[]) {
     *statusPageFileName = 0;
     freedv_mode = FREEDV_MODE_1600;
     recordAny = 0;
+    myrig_model = 0;
+    my_rig = NULL;
     
     if (Pa_Initialize()) {
         fprintf(stderr, "Port Audio failed to initialize");
@@ -682,7 +676,8 @@ int main(int argc, char *argv[]) {
         if (*rpigpio) {
             sys_gpio(rpigpio_path, "1");
         }
-        hamlib_ptt_on();
+        if (my_rig)
+            hamlib_ptt_on();
         sfPlayFile = openPlayFile(txFileName, &sfFs);
     }
 
@@ -874,7 +869,8 @@ int main(int argc, char *argv[]) {
                         if (*rpigpio) {
                             sys_gpio(rpigpio_path, "1");
                         }
-                        hamlib_ptt_on();                        
+                        if (my_rig)
+                            hamlib_ptt_on();                        
                         next_state = STX;
                     }
                     else {
@@ -897,7 +893,8 @@ int main(int argc, char *argv[]) {
                 if (*rpigpio) {
                     sys_gpio(rpigpio_path, "0");
                 }
-                hamlib_ptt_off();                
+                if (my_rig)
+                    hamlib_ptt_off();                
                 next_state = SRX_IDLE;
                 triggered = 0;
                 haveRecording = 0;
@@ -967,10 +964,12 @@ int main(int argc, char *argv[]) {
         sys_gpio("/sys/class/gpio/unexport", rpigpioalive);
     }
  
-    hamlib_ptt_off();
-    rig_close(my_rig);
-    rig_cleanup(my_rig);
-     
+    if (my_rig) {
+        hamlib_ptt_off();
+        rig_close(my_rig);
+        rig_cleanup(my_rig);
+    }
+    
     /* Shut down port audio */
 
     err = Pa_StopStream(stream);
