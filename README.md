@@ -20,6 +20,8 @@ If you have a RS232 serial port (specified with "-c") RTS and DTR is raised on t
 
 If you are using Raspberry Pi you can use one of the GPIOs for PTT control of your transmitter using the "--rpigpio" option.  You need to use the BCM GPIO number so "--rpigpio 11" uses pin 23 of the GPIO connector.
 
+Note FreeDV 700C doesn't have a text channel, so we just record the received file without triggering a Tx response.
+
 A whole lot of code was lifted from freedv-dev for this program.
 
 ## Credits

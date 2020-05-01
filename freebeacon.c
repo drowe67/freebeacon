@@ -534,7 +534,9 @@ int main(int argc, char *argv[]) {
             if (strcmp(optarg, "1600") == 0)
                 freedv_mode = FREEDV_MODE_1600;
             else if (strcmp(optarg, "700C") == 0) {
-		            recordAny = 1;	// no trigger word data stream so record regardless
+                fprintf(stderr, "700C doesn't support text, so there is no trigger word. "
+                        " So we just record the received file every time we get sync");
+                recordAny = 1;	
                 freedv_mode = FREEDV_MODE_700C;
 	    }
             else if (strcmp(optarg, "700D") == 0)
