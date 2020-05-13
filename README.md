@@ -36,12 +36,12 @@ A whole lot of code was lifted from freedv-dev for this program.
 
 1. Dependancies:
    ```
-   sudo apt-get install git cmake sox libsamplerate0-dev portaudio19-dev libsndfile1-dev```
+   sudo apt-get install git cmake sox libsamplerate0-dev portaudio19-dev libsndfile1-dev libhamlib-dev
    ```
    
 1. Building Method 1 - installs codec 2 libraries on your system:
 
-   Install codec2-dev:
+   Install codec2:
     ```
     git clone https://github.com/drowe67/codec2.git
     cd codec2
