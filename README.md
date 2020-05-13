@@ -44,7 +44,7 @@ A whole lot of code was lifted from freedv-dev for this program.
    Install codec2-dev:
     ```
     git clone https://github.com/drowe67/codec2.git
-    cd codec2-dev
+    cd codec2
     mkdir build_linux
     cd build_linux
     cmake ../
@@ -62,6 +62,7 @@ A whole lot of code was lifted from freedv-dev for this program.
     
     Build FreeBeacon:
     ```
+    cd ~
     git clone https://github.com/drowe67/freebeacon.git
     cd freebeacon
     mkdir build_linux
@@ -73,12 +74,13 @@ A whole lot of code was lifted from freedv-dev for this program.
 1. Building Method 2 - without system wide codec 2 installation
    ```
    git clone https://github.com/drowe67/codec2.git
-   cd codec2-dev && mkdir build_linux && cd build_linux
+   cd codec2 && mkdir build_linux && cd build_linux
    cmake ../ && make
    ```
 
    Instruct freebeacon cmake to use local codec2 directory:
      ```
+    cd ~
     git clone https://github.com/drowe67/freebeacon.git
     cd freebeacon && mkdir build_linux cd build_linux
     cmake -DCODEC2_BUILD_DIR=~/codec2/build_linux ..
