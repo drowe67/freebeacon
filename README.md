@@ -82,7 +82,7 @@ A whole lot of code was lifted from freedv-dev for this program.
      ```
     cd ~
     git clone https://github.com/drowe67/freebeacon.git
-    cd freebeacon && mkdir build_linux cd build_linux
+    cd freebeacon && mkdir build_linux && cd build_linux
     cmake -DCODEC2_BUILD_DIR=~/codec2/build_linux ..
     make
     ```
