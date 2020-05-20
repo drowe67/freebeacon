@@ -113,6 +113,18 @@ A whole lot of code was lifted from freedv-dev for this program.
     ```
     
     Testing sound cards on RPi:
+    
+      Note: Make sure your user is in the group ```audio```, otherwise you will see no audio devices:
+      ```
+      $ groups
+      vk5dgr audio
+      ```
+      You can add your user to the audio group with:
+      ```
+      $ sudo addgroup vk5dgr audio
+      ```
+      
+      Then see if you can detect record devices:
       ```
       $ arecord -l
         
