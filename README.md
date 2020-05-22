@@ -146,16 +146,16 @@ A whole lot of code was lifted from freedv-dev for this program.
 The "sox" tool converts between the wav format and the raw audio samples freedv likes.  The "sox" tool will need to be installed on your Linux machine.  This might be easier on a desktop Linux machine but you could try it on a Pi too.
 
 1. To generate the FreeDV 1600 modulated wav file ```prompt_1600.wav``` from the input voice wave file "prompt.wav":
-
-```sh
-$ cd codec2/build_linux/src
-$ sox /path/to/prompt.wav -t .sw -r 8000 -c 1 - | ./freedv_tx 1600 - - |
-sox -t .s16 -r 8000 -c 1 - prompt_1600.wav
-```
+   
+   ```sh
+   $ cd codec2/build_linux/src
+   $ sox /path/to/prompt.wav -t .sw -r 8000 -c 1 - | ./freedv_tx 1600 - - |
+   sox -t .s16 -r 8000 -c 1 - prompt_1600.wav
+   ```
 
 1. Test decode and playback on the default sound device:
 
-```sh
-$ ./freedv_rx 1600 prompt_1600.wav - | aplay -f S16_LE
-```
+   ```sh
+   $ ./freedv_rx 1600 prompt_1600.wav - | aplay -f S16_LE
+   ```
 
